@@ -222,10 +222,10 @@ def do_rsb_build_tools(version):
 
   os.chdir(options.dir + '/rtems-source-builder/bare')
   print(
-    '../source-builder/sb-set-builder ' \
-    RSB_MAIL_ARGS + ' ' \
-    '--log=l-dtc-' + options.version +'.txt' \
-    '--prefix=' + options.dir + '/tools/' + options.version \
+    '../source-builder/sb-set-builder ' + \
+    RSB_MAIL_ARGS +\
+    ' --log=l-dtc-' + options.version +'.txt' +\
+    '--prefix=' + options.dir + '/tools/' + options.version +\
     'devel/dtc >l-dtc-' + options.version + '.txt 2>&1'
   )
 
@@ -240,10 +240,10 @@ def do_rsb_build_tools(version):
 
   os.chdir(options.dir + '/rtems-source-builder/bare')
   print(
-    '../source-builder/sb-set-builder ' \
-    RSB_MAIL_ARGS \
-    '--log=l-spike-' + options.version + '.txt' \
-    '--prefix=' + options.dir + '/tools/' + options.version \
+    '../source-builder/sb-set-builder ' +\
+    RSB_MAIL_ARGS +\
+    '--log=l-spike-' + options.version + '.txt' +\
+    '--prefix=' + options.dir + '/tools/' + options.version +\
     'devel/spike >l-spike-' + options.version + '.txt 2>&1'
   )
 
@@ -259,10 +259,10 @@ def do_rsb_build_tools(version):
 
   os.chdir(options.dir + '/rtems-source-builder/bare')
   print(
-    '../source-builder/sb-set-builder ' \
-    RSB_MAIL_ARGS \
-    ' --log=l-qemu-' + options.version + '.txt' \
-    '--prefix=' + options.dir + '/tools/' + options.version \
+    '../source-builder/sb-set-builder ' +\
+    RSB_MAIL_ARGS +\
+    ' --log=l-qemu-' + options.version + '.txt' +\
+    '--prefix=' + options.dir + '/tools/' + options.version +\
     'devel/qemu4 >l -qemu4-' + options.version + '.txt 2>&1'
   )
 
@@ -273,4 +273,43 @@ def do_rsb_build_tools(version):
   # check that the call completed with no errors
 
 def do_bsp_builder():
+  start_time = time.time()
+
+  print(
+    options.dir + '/rtems-tools/tester/rtems-bsp-builder' +\
+    '--rtems=' + options.dir + '/rtems' +\
+    '--build-path=' + options.dir + '/build' +\
+    '--prefix=' + options.dir + '/tools/' + options.version + '/bsps' +\
+    '--log=build.log' +\
+    '--warnings-report=warnings.log' +\
+    RSB_MAIL_ARGS +\
+    '--profiles=everything'
+  )
+
+  # put that call into a subprocess call
+
+  end_time = time.time()
+  print('BSP builder took ' + str(end_time - start_time) + ' seconds.')
+
+os.environ['PATH'] = options.dir + '/tools/' + options.version + '/bin' + os.environ['PATH']
+
+# Build RTEMS ${version}.x tools if needed
+# need to go back and make sure version is used correctly in this function
+if rsb_updated:
+  do_rsb_build_tools(options.version)
+
+if rtems_updated:
+  os.chdir(options.dir + '/rtems')
+  # subprocess call ./bootstrap -c
+
+# Check that rtems-bootstrap exists, is readable, and executable
+if  not os.path.isfile('./rtems-bootstrap') or \
+    not os.access('./rtems-bootstrap', os.R_OK) or \
+    not os.access('./rtems-bootstrap', os.X_OK):
+  print('This is not an RTEMS version this script supports.')
+  sys.exit(0)
+else:
+  # execute rtems-bootstrap
   pass
+
+# Ensure this is after the RSB has built tools and PATH is updated
