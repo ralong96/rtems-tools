@@ -2,6 +2,8 @@
 
 import os
 import sys
+import time
+from shutil import rmtree
 from optparse import OptionParser
 
 sys.path.insert(1, os.getcwd()+'/rtemstoolkit')
@@ -40,7 +42,7 @@ parser.add_option(
   '-D',
   '--top-directory',
   dest='dir',
-  default=os.environ['HOME']+'/rtems-cron2',
+  default=os.environ['HOME']+'/rtems-cron',
   help='Top directory (default=${HOME}/rtems-cron'
 )
 parser.add_option(
@@ -171,4 +173,104 @@ if not options.force_build and \
   print('No updates and forced build not requested -- NOACTION!')
   sys.exit(0)
 
-# define builder functions here
+def do_rsb_build_tools(version):
+  # Basic Cross-compilation Tools
+  os.chdir(options.dir + 'rtems-source-builder/rtems')
+
+  # clean the install point
+  if os.path.isdir(options.dir + '/tools'):
+    rmtree('./tools/' + options.version)
+
+  with open('./config/' + options.version + '/rtems-all.bset') as f:
+    rset = [line.rstrip() for line in f]  # remove the trailing '\n'
+
+  # remove 'VERSION/rtems-' from the beginnging of each string
+  for i in range(len(rset)):
+    rset[i] = rset[i].split('-')[1]
+
+  start_time = time.time()
+
+  print(
+    'r time ../source-builder/sb-set-builder \
+    ${RSB_MAIL_ARGS} \
+    --keep-going \
+    --log=l-${rcpu}-${version}.txt \
+    --prefix=${TOP}/tools/${version} \
+    ${rset} >o-${rcpu}-${version}.txt 2>&1 \
+    results=$?'
+  )
+  
+  """
+  for rcpu in rset:
+    # should probably change this to subprocess.popen()
+    call_beg_time = time.time()
+    os.system('../source-builder/sb-set-builder ' + \
+      RSB_MAIL_ARGS + \
+      ' --keep-going --log=l-' + rcpu + '-' + options.version \
+      ' --prefix=' + options.dir + '/tools/' + options.version \
+      rset >o-rcpu-options.version.txt)
+    call_end_time = time.time()
+    print('building the tools for ' + rcpu + ' took ' + str(call_end_time - call_beg_time) + ' seconds...')
+  """
+  end_time = time.time()
+  print('\n\nBuilding all of the tools took ' + str(end_time - start_time) + ' seconds.')
+
+  # add conditional here that will check whether the testing of the builds failed
+
+  # Device Tree Compiler
+  start_time = time.time()
+
+  os.chdir(options.dir + '/rtems-source-builder/bare')
+  print(
+    '../source-builder/sb-set-builder ' \
+    RSB_MAIL_ARGS + ' ' \
+    '--log=l-dtc-' + options.version +'.txt' \
+    '--prefix=' + options.dir + '/tools/' + options.version \
+    'devel/dtc >l-dtc-' + options.version + '.txt 2>&1'
+  )
+
+  # put that call in a subprocess call
+  end_time = time.time()
+  print('Running the device tree compiler took ' + str(end_time - start_time) + ' seconds.')
+
+  # check that call was completed successfully
+
+  # Spike RISC-V Simulator
+  start_time = time.time()
+
+  os.chdir(options.dir + '/rtems-source-builder/bare')
+  print(
+    '../source-builder/sb-set-builder ' \
+    RSB_MAIL_ARGS \
+    '--log=l-spike-' + options.version + '.txt' \
+    '--prefix=' + options.dir + '/tools/' + options.version \
+    'devel/spike >l-spike-' + options.version + '.txt 2>&1'
+  )
+
+  # put that call into a subprocess call
+
+  end_time = time.time()
+  print('Running the Spike RISC-V Simulator took ' + str(end_time - start_time) + ' seconds.')
+
+  # check that call completed with no errors
+
+  # Qemu Simulator
+  start_time = time.time()
+
+  os.chdir(options.dir + '/rtems-source-builder/bare')
+  print(
+    '../source-builder/sb-set-builder ' \
+    RSB_MAIL_ARGS \
+    ' --log=l-qemu-' + options.version + '.txt' \
+    '--prefix=' + options.dir + '/tools/' + options.version \
+    'devel/qemu4 >l -qemu4-' + options.version + '.txt 2>&1'
+  )
+
+  # put that call into a subprocess call
+  end_time = time.time()
+  print('Running Qemu Simulator took ' + str(end_time - start_time) + ' seconds.')
+
+  # check that the call completed with no errors
+
+def do_bsp_builder():
+  pass
