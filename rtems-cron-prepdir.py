@@ -8,17 +8,24 @@
     if using python 2.7
       - if using a RedHat or CentOS system run
           - sudo dnf install xz-devel
-      OR
+        OR
       - if using a Debian based Linux distribution
           - sudo apt-get install liblzma-dev
 
       Then
         - install backports.lzma like so
-            - pip install pip install pyliblzma
+            - pip install backports.lzma
+
+  Examples:
+    - pulling code with git
+      - python rtems-cron-predir.py -g
+    - With release tars
+      - python rtems-cron-predir.py -v -r -R https://ftp.rtems.org/pub/rtems/releases/5/5.0.0/5.0.0-m2005-1 -t 5.0.0-m2005-1
 """
 
 import os
 import sys
+import time
 from optparse import OptionParser
 
 sys.path.insert(1, os.getcwd()+'/rtemstoolkit')
@@ -41,7 +48,7 @@ parser.add_option(
 parser.add_option(
   '-g',
   '--git',
-  dest='method',
+  dest='from_git',
   action='store_true',
   default=True,
   help='prep from git'
@@ -49,7 +56,7 @@ parser.add_option(
 parser.add_option(
   '-r',
   '--release',
-  dest='method',
+  dest='from_git',
   action='store_false',
   help='prep from release'
 )
@@ -97,7 +104,7 @@ if os.path.isdir(options.dir):
   sys.exit(1)
 
 # if prepping from release, ensure we have the necessary arguments
-if not options.method:
+if not options.from_git:
   if not options.release_url:
     print('release URL not set')
     sys.exit(1)
@@ -113,49 +120,46 @@ os.chdir(options.dir)
 
 rtems_repo = git.repo(os.getcwd())
 
-if options.method:
+if options.from_git:
   for directory in ['rtems', 'rtems-tools', 'rtems-source-builder']:
-    vprint('Cloning ' + directory + '...') # maybe add something that tells how long it took?
+    vprint('Cloning ' + directory + '...')
+    start_time = time.time()
     try:
       rtems_repo.clone('git://git.rtems.org/' + directory + '.git', options.dir+'/'+directory)
     except:
       sys.exit(1)
     else:
       vprint(directory + ' succesfully cloned...')
+    end_time = time.time()
+    print('Cloning took ' + str(end_time - start_time) + ' seconds.')
 else:
   import wget
   import tarfile
 
-  # if using python3
-  if (sys.version_info > (3,0)):
+  # if using python2
+  if (sys.version_info < (3,0)):
+    from backports import lzma
+    from contextlib import closing
 
-    for directory in ['rtems', 'rtems-tools', 'rtems-source-builder']:
-      vprint('Downloading '+options.release_url + '/sources/' + directory+'-' + options.tag + '.tar.xz...')
-      wget.download(options.release_url + '/sources/' + directory+'-' + options.tag + '.tar.xz',options.dir)
-      vprint('Done...')
-      vprint('Unpacking ' + options.dir + '/' + directory + '-' + options.tag + '.tar.xz...')
+  for directory in ['rtems', 'rtems-tools', 'rtems-source-builder']:
+    vprint('Downloading '+options.release_url + '/sources/' + directory+'-' + options.tag + '.tar.xz...')
+    wget.download(options.release_url + '/sources/' + directory+'-' + options.tag + '.tar.xz',options.dir)
+    vprint('Done...')
+    vprint('Unpacking ' + options.dir + '/' + directory + '-' + options.tag + '.tar.xz...')
+
+    # if using python3
+    if (sys.version_info > (3,0)):
       with tarfile.open(options.dir + '/' + directory + '-' + options.tag + '.tar.xz') as f:
         f.extractall('.')
-      vprint('Done...')
-      os.remove(options.dir + '/' + directory + '-' + options.tag + '.tar.xz')
-      os.rename(options.dir + '/' + directory + '-' + options.tag, options.dir + '/' + directory)
 
-  # if using python2
-  else:
-    import contextlib
-    import lzma
-    
-    for directory in ['rtems', 'rtems-tools', 'rtems-source-builder']:
-      vprint('Downloading '+ options.release_url + '/sources/' + directory +'-' + options.tag + '.tar.xz...')
-      wget.download(options.release_url + '/sources/' + directory + '-' + options.tag + '.tar.xz',options.dir)
-      vprint('Done...')
-      vprint('Unpacking ' + options.dir + '/' + directory + '-' + options.tag + '.tar.xz...')
-      with contextlib.closing(lzma.LZMAFile(options.dir + '/' + directory+'-' + options.tag + '.tar.xz')) as xz:
+    else:
+      with closing(lzma.open(options.dir + '/' + directory + '-' + options.tag + '.tar.xz')) as xz:
         with tarfile.open(fileobj=xz) as f:
           f.extractall('.')
-      vprint('Done...')
-      os.remove(options.dir + '/' + directory + '-' + options.tag + '.tar.xz')
-      os.rename(options.dir + '/' + directory + '-' + options.tag, options.dir + '/' + directory)
+
+    vprint('Done...')
+    os.remove(options.dir + '/' + directory + '-' + options.tag + '.tar.xz')
+    os.rename(options.dir + '/' + directory + '-' + options.tag, options.dir + '/' + directory)
 
 vprint('\n\nScript finished successfully...')
 sys.exit(0)
