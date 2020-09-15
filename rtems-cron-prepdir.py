@@ -28,6 +28,8 @@ import sys
 import time
 from optparse import OptionParser
 
+from __future__ import print_function
+
 sys.path.insert(1, os.getcwd()+'/rtemstoolkit')
 
 from rtemstoolkit import git

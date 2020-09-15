@@ -384,10 +384,42 @@ def cmd_exists(cmd):
       for path in os.environ["PATH"].split(os.pathsep)
     )
 
+# where does SMP_ARGS go?
 def test_single_bsp(cpu, bsp):
   if cpu == 'smp':
     SMP_ARGS = '-S'
   else:
     SMP_ARGS = ''
 
+  if cmd_exists(cpu + '-rtems' + options.version + '-gcc'):
+    pass
+  else:
+    print('WARNING - no gcc for ' + cpu + ' ' + bsp)
 
+if rsb_updated or rtems_updated:
+  start_time = time.time()
+
+  # it said cd ${rtemsdir}/.. rtemsdir = options.dir + '/rtems' so I think it's just options.dir
+  os.chdir(options.dir)
+
+  test_single_bsp('sparc', 'erc32-sis')
+  test_single_bsp('sparc', 'leon2-sis')
+  test_single_bsp('sparc', 'leon3-sis')
+  test_single_bsp('powerpc', 'psim')
+  test_single_bsp('mips', 'jmr3904')
+  test_single_bsp('riscv', 'griscv-sis')
+  # test_single_bsp('smp', 'sparc', 'leon3-sis')
+
+  # Make sure Spike is available for these BSPs
+  if cmd_exists('spike'):
+    bsps = ['rv32iac_spike', 'rv32imac_spike', 'rv32imafc_spike', \
+    'rv32imafdc_spike', 'rv32imafd_spike', 'rv32im_spike', 'rv32i_spike', \
+    'rv64imac_medany_spike', 'rv64imac_spike', 'rv64imafdc_medany_spike', \
+    'rv64imafdc_spike', 'rv64imafd_medany', 'rv64imafd_medany_spike', \
+    'rv64imafd_spike'
+    ]
+
+    for bsp in bsps:
+      test_single_bsp('riscv', bsp)
+
+  # Now build all supported BSP bset stacks
