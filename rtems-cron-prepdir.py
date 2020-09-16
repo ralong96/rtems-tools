@@ -23,12 +23,12 @@
       - python rtems-cron-predir.py -v -r -R https://ftp.rtems.org/pub/rtems/releases/5/5.0.0/5.0.0-m2005-1 -t 5.0.0-m2005-1
 """
 
+from __future__ import print_function
+
 import os
 import sys
 import time
 from optparse import OptionParser
-
-from __future__ import print_function
 
 sys.path.insert(1, os.getcwd()+'/rtemstoolkit')
 
