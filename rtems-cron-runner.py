@@ -1,20 +1,27 @@
 #! /usr/bin/python
 
+"""
+  Example usage:
+
+    - 
+"""
+
+from __future__ import print_function
+
 import os
 import sys
 import time
+import datetime
 import subprocess
 from shutil import rmtree
 from optparse import OptionParser
-
-from __future__ import print_function
 
 sys.path.insert(1, os.getcwd()+'/rtemstoolkit')
 
 from rtemstoolkit import git
 
 # might just print out the date or something instead of giving seconds
-script_start = time.time()
+script_start = datetime.datetime.now()
 
 # everywhere where exedir was used, I might need to make a function to do what Joel did in his script
 # directory where the script is run from
@@ -42,6 +49,7 @@ parser.add_option(
   '-f',
   '--force-build',
   dest='force_build',
+  action='store_true',
   default=False,
   help='force build (default=no)'
 )
@@ -208,14 +216,19 @@ if not options.force_build and \
 
 def do_rsb_build_tools(version):
   # Basic Cross-compilation Tools
-  os.chdir(options.dir + 'rtems-source-builder/rtems')
+  os.chdir(options.dir + '/rtems-source-builder/rtems')
 
   # clean the install point
   if os.path.isdir(options.dir + '/tools'):
     vprint('Removing ./tools/version ...')
     rmtree('./tools/' + version)
 
-  with open('./config/' + version + '/rtems-all.bset') as f:
+  if not os.path.isfile('./config/' + str(version) + '/rtems-all.bset'):
+    print(options.dir + '/rtems-source-builder/rtems/config' + str(version) + '/rtems-al.bset', end='', file=sys.stderr)
+    print(' does not exist.', file=sys.stderr)
+    sys.exit(1)
+
+  with open('./config/' + str(version) + '/rtems-all.bset') as f:
     rset = [line.rstrip() for line in f]  # remove the trailing '\n'
 
   # remove 'VERSION/rtems-' from the beginnging of each string
@@ -223,20 +236,18 @@ def do_rsb_build_tools(version):
     rset[i] = rset[i].split('-')[1]
 
   start_time = time.time()
-
-  print(
-    'time ../source-builder/sb-set-builder ' +\
-    RSB_MAIL_ARGS +\
-    '--keep-going' +\
-    '--log=l-' + rcpu '-' + version + '.txt' +\
-    '--prefix=' + options.dir + '/tools/' + version +\
-    rset + '>o-' + rcpu '-' + version '.txt 2>&1' \
-  )
   
   for rcpu in rset:
     call_beg_time = time.time()
-    """
-    # don't know if this will work yet
+    print(
+    'time ../source-builder/sb-set-builder ' +\
+    RSB_MAIL_ARGS +\
+    '--keep-going' +\
+    '--log=l-' + rcpu + '-' + version + '.txt' +\
+    '--prefix=' + options.dir + '/tools/' + version +\
+    str(rset) + '>o-' + rcpu + '-' + version + '.txt 2>&1' \
+  )
+
     vprint('Building the tools for ' + rcpu + '...')
     result = subprocess.call([
       '../source-builder/sb-set-builder',
@@ -245,10 +256,10 @@ def do_rsb_build_tools(version):
       '--log=l' + rcpu + '-' + version,
       '--prefix=' + options.dir + '/tools/' + options.version,
       'rset',
-      '>o-' + rcpi + '-' + version + '.txt',
+      '>o-' + rcpu + '-' + version + '.txt',
       '2>&1'
     ])
-    """
+
     call_end_time = time.time()
     vprint('Building the tools for ' + rcpu + ' took ' + str(call_end_time - call_beg_time) + ' seconds...') # ask about making all statements like these vprints
 
@@ -391,7 +402,7 @@ def do_bsp_builder():
     print('BSP builder failed. ', file=sys.stderr)
     sys.exit(1)
 
-os.environ['PATH'] = options.dir + '/tools/' + options.version + '/bin' + os.environ['PATH']
+os.environ['PATH'] = options.dir + '/tools/' + str(options.version) + '/bin' + os.environ['PATH']
 
 # Build RTEMS ${version}.x tools if needed
 if rsb_updated:
@@ -410,7 +421,7 @@ if  not os.path.isfile('./rtems-bootstrap') or \
   print('This is not an RTEMS version this script supports.')
   sys.exit(0)
 else:
-  result = subprocess.call(['rtems-bootstrap'])
+  result = subprocess.call(['./rtems-bootstrap'])
   
   if result != 0:
     print('rtems-bootstrap failed. ', file=sys.stderr)
@@ -440,7 +451,7 @@ def test_single_bsp(cpu, bsp, SMP_ARGS=''):
       options.version,
       BB_ARGS,
       SMP_ARGS,
-      '-D'
+      '-D',
       cpu,
       bsp
     ])
@@ -501,7 +512,7 @@ if rsb_updated or rtems_updated:
 
       do_bsp_builder()
 
-script_end = time.time()
+script_end = datetime.datetime.now()
 vprint('START: ' + str(script_start))
 vprint('END: ' + str(script_end))
 sys.exit(0)
