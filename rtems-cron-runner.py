@@ -1,38 +1,41 @@
 #! /usr/bin/python
 
 """
-  Example usage:
-
-    - 
+  Example Usage:
+  
+    - python rtems-cron-runner.py -v -f -w
+    
+      - build it verbosely, force build with default version (6 in this case)
+      
+    - python rtems-ron-prepdir.py -v -f -g -V 5
+      
+      - build it verbosely, force build, do git update, use version 5
 """
 
 from __future__ import print_function
 
+import datetime
 import os
+import subprocess
 import sys
 import time
-import datetime
-import subprocess
+
 from shutil import rmtree
 from optparse import OptionParser
 
-sys.path.insert(1, os.getcwd()+'/rtemstoolkit')
+starting_directory = os.getcwd()
+sys.path.insert(1, starting_directory + '/rtemstoolkit')
 
 from rtemstoolkit import git
 
-# might just print out the date or something instead of giving seconds
 script_start = datetime.datetime.now()
-
-# everywhere where exedir was used, I might need to make a function to do what Joel did in his script
-# directory where the script is run from
-starting_directory = os.getcwd()
-
-def exedir():
-  os.chdir(starting_directory)
-  return os.getcwd()
-
+  
 description = '''Runs all of the build tests'''
 
+# will have to check if on branch 5 and if waf is specified because it won't work
+# if build bsp fails, there will be a b.log that needs to be mailed
+# will have to convert build bsp to python as well, will be able to invoke it as a subroutine
+# make it a class that will have command line arguments
 parser = OptionParser(
   usage='usage: %prog [OPTIONS]',
   description=description
@@ -57,13 +60,14 @@ parser.add_option(
   '-g',
   '--git-update',
   dest='git',
-  default=True,
-  help='do git update (default=yes)'
+  action='store_true',
+  default=False,
+  help='do git update (default=no)'
 )
 parser.add_option(
   '-D',
   '--top-directory',
-  dest='dir',
+  dest='top',
   default=os.environ['HOME']+'/rtems-cron',
   help='Top directory (default=${HOME}/rtems-cron'
 )
@@ -71,8 +75,16 @@ parser.add_option(
   '-V',
   '--version',
   dest='version',
-  default=5,
-  help='RTEMS Version (default=5)'
+  default='6',
+  help='RTEMS Version (default=6)'
+)
+parser.add_option(
+  '-w',
+  '--waf-build',
+  dest='waf_build',
+  default=False,
+  action='store_true',
+  help='Build using the WAF build system (default=no)'
 )
 parser.add_option(
   '-m',
@@ -81,9 +93,6 @@ parser.add_option(
   default=True,
   help='send email (default=yes)'
 )
-# implement mailer.py, I don't remember why. It looks like other scripts are handling arguments where this information is passed in
-# need to ask what the default from and to email are supposed to be
-# pretty sure the to email is fine, but I dont think the from is
 parser.add_option(
   '-F',
   '--from-address',
@@ -112,128 +121,165 @@ def cmd_exists(cmd):
       os.access(os.path.join(path, cmd), os.X_OK) 
       for path in os.environ["PATH"].split(os.pathsep)
     )
-
-# check that TOP exists
-if not os.path.isdir(options.dir):
-  print(options.dir)
-  print('TOP directory does not exist!', file=sys.stderr)
-  print('Run rtems-cron-prepdir.py before this script!', file=sys.stderr)
-  sys.exit(1)
-
-os.chdir(options.dir)
-
-# need to add verbose statements
-if os.path.isdir(options.dir + '/rtems') and \
-   os.path.isdir(options.dir + '/rtems-source-builder') and \
-   os.path.isdir(options.dir + '/rtems-tools'):
-
-  if options.git:
-    rsb_updated = False
-    os.chdir('./rtems-source-builder')
-
-    if os.path.isdir('./.git'):
-      rtems_source_builder_repo = git.repo(os.getcwd())
-      rtems_source_builder_repo.fetch()
-      result = rtems_source_builder_repo._run(['rev-list', 'HEAD...master', '--count'])
-      result = int(result[1]) # the number of revisions behind
-
-      if result != 0:
-        vprint('Pulling rtems_source_builder...')
-        rtems_source_builder_repo.pull()
-        rsb_updated = True
-        vprint('Updated')
-
-    os.chdir('..')
-
-    tools_updated = False
-    os.chdir('./rtems-tools')
-
-    if os.path.isdir('./.git'):
-      rtems_tools_repo = git.repo(os.getcwd())
-      rtems_tools_repo.fetch()
-      result = rtems_source_builder_repo._run(['rev-list', 'HEAD...master', '--count'])
-      result = result[0]
-
-      if result != 0:
-        vprint('Pulling rtems-tools...')
-        rtems_tools_repo.pull()
-        tools_updated = True
-        vprint('Updated')
-
-    os.chdir('..')
-
-    rtems_updated = False
-    os.chdir('./rtems')
-
-    if os.path.isdir('./.git'):
-      rtems_repo = git.repo(os.getcwd())
-      rtems_repo.fetch()
-      result = rtems_repo._run(['rev-list', 'HEAD...master', '--count'])
-      result = result[0]
-
-      if result != 0:
-        vprint('Pulling rtems...')
-        rtems_repo.pull()
-        rtems_updated = True
-        vprint('Updated')
-
-else:
-  print('All of the directories are not present.', file=sys.stderr)
-  print('Delete the directory and rerun rtems-cron-prepdir.py. Exiting...', file=sys.stderr)
-  sys.exit(1)
-
-if options.force_build:
-  tools_updated = True
-  rsb_updated = True
-  rtems_updated = True
-  if options.verbose:
-    print('Forcing builds whether or not there are updates')
-
-# if the user wants the results sent in an email
-if options.send_email:
-  RSB_MAIL_ARGS = '-- mail --mail-to=' + options.to_addr + ' --mail-from=' + options.from_addr
-else:
-  RSB_MAIL_ARGS = ''
-
+    
+def exedir():
+  os.chdir(starting_directory)
+  return os.getcwd()
+  
 def yes_or_no(val):
   if val:
     return 'yes'
   else:
     return 'no'
 
+master_version = '6' # don't know if I need this or not yet
+
+# verify that Top directory exists
+if not os.path.isdir(options.top):
+  print('The top directory, ' + options.top + ', does not exist.', file=sys.stderr)
+  print('Run rtems-cron-prepdir.py before this script!', file=sys.stderr)
+  sys.exit(1)
+
+os.chdir(options.top)
+
+# verify that arguments make sense
+
+# may consolidate the updating process into a function
+
+# ensure that user is not trying to use waf on RTEMS 5
+if options.version == '5' and options.waf_build:
+  print('WAF was not the build system used with RTEMS 5.', file=sys.stderr)
+  sys.exit(1)
+# may check some other comparison of arguments
+
+rsb_updated = False
+rtems_updated = False
+
+# this only works if it was created by rtems-cron-prepdir.py
+if os.path.isdir(options.top + '/rtems') and \
+   os.path.isdir(options.top + '/rtems-source-builder'):
+
+  # if the directories were gotten from git, they may be updated
+  if options.git:
+    # ensure that git was used to get these directories
+    if '.git' in os.listdir(options.top + '/rtems') and \
+                 os.listdir(options.top + '/rtems-source-builder'):
+
+      os.chdir('./rtems-source-builder')
+      
+      rsb_repo = git.repo(os.getcwd())
+      
+      print('branch: ',rsb_repo.branch())
+      
+      # determine what branch we're on and determine if we need to checkout a different one
+      if rsb_repo.branch() != options.version:
+        try:
+          rsb_repo.checkout(options.version)
+        except:
+          print('An error occured when trying to checkout branch ' + options.version + '...')
+          sys.exit(1)
+      
+      rsb_repo.fetch()
+      
+      # verify with Joel that this looks right
+      if options.version == master_version:
+        result = rsb_repo._run(['rev-list', 'HEAD...master', '--count'])
+      else:
+        result = rsb_repo._run(['rev-list', 'HEAD...' + options.version, '--count'])
+        
+      result = int(result[1]) # the number of revisions behind
+      
+      if result != 0:
+        vprint('Pulling rtems_source_builder...')
+        rsb_repo.pull()
+        rsb_updated = True
+        vprint('Done...')
+        
+      os.chdir('../rtems')
+
+      rtems_repo = git.repo(os.getcwd())
+      
+      # determine what branch we're on and determine if we need to checkout a different one
+      if rtems_repo.branch() != options.version:
+        try:
+          rtems_repo.checkout(options.version)
+        except:
+          print('An error occured when trying to checkout branch ' + options.version + '...')
+          sys.exit(1)
+      
+      rtems_repo.fetch()
+      
+      if options.version == master_version:
+        result = rtems_repo._run(['rev-list', 'HEAD...master', '--count'])
+      else:
+        result = rtems_repo._run(['rev-list', 'HEAD...' + options.version, '--count'])
+        
+      result = int(result[1]) # the number of revisions behind
+      
+      if result != 0:
+        vprint('Pulling rtems...')
+        rtems_repo.pull()
+        rtems_updated = True
+        vprint('Done...')
+        
+      os.chdir('..')
+      
+    else:
+      print('All \'.git\' directories not present. Clean up and rerun prepdir!', file=sys.stderr)
+      sys.exit(1)
+    
+# if the user wants to force an update
+if options.force_build:
+  rsb_updated = True
+  rtems_updated = True
+  if options.verbose:
+    print('Forcing builds whether or not there are updates')
+    
+# if the user wants the results sent in an email
+if options.send_email:
+  RSB_MAIL_ARGS = '--mail --mail-to=' + options.to_addr + ' --mail-from=' + options.from_addr + ' '
+else:
+  RSB_MAIL_ARGS = ''
+  
 vprint('Git Update: ' + yes_or_no(options.git))
 vprint('Forced Update: ' + yes_or_no(options.force_build))
-vprint('Tools Updated: ' + yes_or_no(tools_updated))
 vprint('RSB Updated: ' + yes_or_no(rsb_updated))
 vprint('RTEMS Updated: ' + yes_or_no(rtems_updated))
 
+# nothing to be done if everything is up to date
 if not options.force_build and \
-   not tools_updated and \
    not rsb_updated and \
    not rtems_updated:
   print('No updates and forced build not requested -- NOACTION!')
   sys.exit(0)
 
+# build the tools 
 def do_rsb_build_tools(version):
   # Basic Cross-compilation Tools
-  os.chdir(options.dir + '/rtems-source-builder/rtems')
+  os.chdir(options.top + '/rtems-source-builder/rtems')
 
   # clean the install point
-  if os.path.isdir(options.dir + '/tools'):
+  if os.path.isdir(options.top + '/tools'):
     vprint('Removing ./tools/version ...')
     rmtree('./tools/' + version)
 
   if not os.path.isfile('./config/' + str(version) + '/rtems-all.bset'):
-    print(options.dir + '/rtems-source-builder/rtems/config' + str(version) + '/rtems-al.bset', end='', file=sys.stderr)
+    print(options.top + '/rtems-source-builder/rtems/config/' + str(version) + '/rtems-all.bset', end='', file=sys.stderr)
     print(' does not exist.', file=sys.stderr)
     sys.exit(1)
 
+  # remove the trailing '\n'
   with open('./config/' + str(version) + '/rtems-all.bset') as f:
-    rset = [line.rstrip() for line in f]  # remove the trailing '\n'
+    rset = [line.rstrip() for line in f]
 
   # remove 'VERSION/rtems-' from the beginnging of each string
   for i in range(len(rset)):
     rset[i] = rset[i].split('-')[1]
+
+  rset_string = ''
+
+  for rcpu in rset:
+    rset_string += rcpu + ' '
 
   start_time = time.time()
   
@@ -242,10 +288,10 @@ def do_rsb_build_tools(version):
     print(
     'time ../source-builder/sb-set-builder ' +\
     RSB_MAIL_ARGS +\
-    '--keep-going' +\
-    '--log=l-' + rcpu + '-' + version + '.txt' +\
-    '--prefix=' + options.dir + '/tools/' + version +\
-    str(rset) + '>o-' + rcpu + '-' + version + '.txt 2>&1' \
+    '--keep-going ' +\
+    '--log=l-' + rcpu + '-' + version + '.txt ' +\
+    '--prefix=' + options.top + '/tools/' + version + ' ' +\
+    rset_string + ' o-' + rcpu + '-' + version + '.txt 2>&1' \
   )
 
     vprint('Building the tools for ' + rcpu + '...')
@@ -254,14 +300,14 @@ def do_rsb_build_tools(version):
       RSB_MAIL_ARGS,
       '--keep-going',
       '--log=l' + rcpu + '-' + version,
-      '--prefix=' + options.dir + '/tools/' + options.version,
-      'rset',
+      '--prefix=' + options.top + '/tools/' + version,
+      rset_string,
       '>o-' + rcpu + '-' + version + '.txt',
       '2>&1'
     ])
 
     call_end_time = time.time()
-    vprint('Building the tools for ' + rcpu + ' took ' + str(call_end_time - call_beg_time) + ' seconds...') # ask about making all statements like these vprints
+    vprint('Building the tools for ' + rcpu + ' took ' + str(call_end_time - call_beg_time) + ' seconds...')
 
   end_time = time.time()
   vprint('\n\nBuilding all of the tools took ' + str(end_time - start_time) + ' seconds.')
@@ -274,12 +320,12 @@ def do_rsb_build_tools(version):
   # Device Tree Compiler
   start_time = time.time()
 
-  os.chdir(options.dir + '/rtems-source-builder/bare')
+  os.chdir(options.top + '/rtems-source-builder/bare')
   print(
     '../source-builder/sb-set-builder ' + \
     RSB_MAIL_ARGS +\
     ' --log=l-dtc-' + options.version +'.txt' +\
-    '--prefix=' + options.dir + '/tools/' + version +\
+    '--prefix=' + options.top + '/tools/' + version +\
     'devel/dtc >l-dtc-' + options.version + '.txt 2>&1'
   )
 
@@ -289,7 +335,7 @@ def do_rsb_build_tools(version):
       '../source-builder/sb-set-builder',
       RSB_MAIL_ARGS,
       '--log=l-dtc-' + version + '.txt',
-      '--prefix=' + options.dir + '/tools/' + version,
+      '--prefix=' + options.top + '/tools/' + version,
       'rset',
       '>o-' + rcpi + '-' + version + '.txt',
       '2>&1'
@@ -308,12 +354,12 @@ def do_rsb_build_tools(version):
   # Spike RISC-V Simulator
   start_time = time.time()
 
-  os.chdir(options.dir + '/rtems-source-builder/bare')
+  os.chdir(options.top + '/rtems-source-builder/bare')
   print(
     '../source-builder/sb-set-builder ' +\
     RSB_MAIL_ARGS +\
     '--log=l-spike-' + version + '.txt' +\
-    '--prefix=' + options.dir + '/tools/' + version +\
+    '--prefix=' + options.top + '/tools/' + version +\
     'devel/spike >l-spike-' + version + '.txt 2>&1'
   )
 
@@ -323,7 +369,7 @@ def do_rsb_build_tools(version):
       '../source-builder/sb-set-builder',
       RSB_MAIL_ARGS,
       '--log=l-spike-' + version + '.txt',
-      '--prefix=' + options.dir + '/tools/' + version,
+      '--prefix=' + options.top + '/tools/' + version,
       'devel/spike',
       '>l-spike-' + version + '.txt',
       '2>&1'
@@ -341,12 +387,12 @@ def do_rsb_build_tools(version):
   # Qemu Simulator
   start_time = time.time()
 
-  os.chdir(options.dir + '/rtems-source-builder/bare')
+  os.chdir(options.top + '/rtems-source-builder/bare')
   print(
     '../source-builder/sb-set-builder ' +\
     RSB_MAIL_ARGS +\
     ' --log=l-qemu-' + version + '.txt' +\
-    '--prefix=' + options.dir + '/tools/' + version +\
+    '--prefix=' + options.top + '/tools/' + version +\
     'devel/qemu4 >l-qemu4-' + version + '.txt 2>&1'
   )
   """
@@ -355,7 +401,7 @@ def do_rsb_build_tools(version):
       '../source-builder/sb-set-builder',
       RSB_MAIL_ARGS,
       '--log=l-qemu-' + version + '.txt',
-      '--prefix=' + options.dir + '/tools/' + version,
+      '--prefix=' + options.top + '/tools/' + version,
       'devel/qemu4',
       '>l-qemu4-' + version + '.txt',
       '2>&1'
@@ -373,10 +419,10 @@ def do_bsp_builder():
   start_time = time.time()
 
   print(
-    options.dir + '/rtems-tools/tester/rtems-bsp-builder' +\
-    '--rtems=' + options.dir + '/rtems' +\
-    '--build-path=' + options.dir + '/build' +\
-    '--prefix=' + options.dir + '/tools/' + options.version + '/bsps' +\
+    options.top + '/rtems-tools/tester/rtems-bsp-builder' +\
+    '--rtems=' + options.top + '/rtems' +\
+    '--build-path=' + options.top + '/build' +\
+    '--prefix=' + options.top + '/tools/' + options.version + '/bsps' +\
     '--log=build.log' +\
     '--warnings-report=warnings.log' +\
     RSB_MAIL_ARGS +\
@@ -385,10 +431,10 @@ def do_bsp_builder():
   """
   vprint('Running BSP builder...')
   result = subprocess.call([
-    options.dir + '/rtems-tools/tester/rtems-bsp-builder',
-    '--rtems=' + options.dir + '/rtems',
-    '--build-path=' + options.dir + '/build',
-    '--prefix=' + options.dir + '/tools/' + options.version + '/bsps',
+    options.top + '/rtems-tools/tester/rtems-bsp-builder',
+    '--rtems=' + options.top + '/rtems',
+    '--build-path=' + options.top + '/build',
+    '--prefix=' + options.top + '/tools/' + options.version + '/bsps',
     '--log=build.log',
     '--warnings-report=warnings.log',
       RSB_MAIL_ARGS,
@@ -402,14 +448,14 @@ def do_bsp_builder():
     print('BSP builder failed. ', file=sys.stderr)
     sys.exit(1)
 
-os.environ['PATH'] = options.dir + '/tools/' + str(options.version) + '/bin' + os.environ['PATH']
+os.environ['PATH'] = options.top + '/tools/' + str(options.version) + '/bin' + os.environ['PATH']
 
 # Build RTEMS ${version}.x tools if needed
 if rsb_updated:
-  do_rsb_build_tools(options.version)
+  do_rsb_build_tools(str(options.version))
 
 if rtems_updated:
-  os.chdir(options.dir + '/rtems')
+  os.chdir(options.top + '/rtems')
   
   subprocess.call(['./bootstrap', '-c'])
 
@@ -432,7 +478,7 @@ if options.send_email:
 else:
   MAIL_ARG = ''
 
-BB_ARGS = '-T ' + options.dir + '-v -r ' + MAIL_ARG + ' -t'
+BB_ARGS = '-T ' + options.top + '-v -r ' + MAIL_ARG + ' -t'
 
 def test_single_bsp(cpu, bsp, SMP_ARGS=''):
   if cmd_exists(cpu + '-rtems' + options.version + '-gcc'):
@@ -465,7 +511,7 @@ def test_single_bsp(cpu, bsp, SMP_ARGS=''):
 if rsb_updated or rtems_updated:
   start_time = time.time()
 
-  os.chdir(options.dir)
+  os.chdir(options.top)
 
   test_single_bsp('sparc', 'erc32-sis')
   test_single_bsp('sparc', 'leon2-sis')
@@ -488,7 +534,7 @@ if rsb_updated or rtems_updated:
       test_single_bsp('riscv', bsp)
 
     # Now build all supported BSP bset stacks
-    os.chdir(options.dir + '/rtems-source-builder/rtems')
+    os.chdir(options.top + '/rtems-source-builder/rtems')
 
     bsets = ['atsamv', 'beagleboneblack', 'erc32', 'gr712rc', 'gr740', 'imx7',\
      'pc', 'qoriq_e500', 'qoriq_e6500_32', 'qoriq_e6500_64', 'raspberrypi2', \
@@ -501,7 +547,7 @@ if rsb_updated or rtems_updated:
         '../source-builder/sb-set-builder',
         RSB_MAIL_ARGS,
         '--log=l-' + bset + '-' + options.version + '.txt',
-        '--prefix=' + options.dir + '/tools/' + options.version,
+        '--prefix=' + options.top + '/tools/' + options.version,
         options.version + '/bsps/' + bset,
         '>o-' + bset + '-' + options.version + '.txt',
         '2>&1'
@@ -513,6 +559,34 @@ if rsb_updated or rtems_updated:
       do_bsp_builder()
 
 script_end = datetime.datetime.now()
-vprint('START: ' + str(script_start))
-vprint('END: ' + str(script_end))
+print('START: ', script_start)
+print('END:   ', script_end)
 sys.exit(0)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

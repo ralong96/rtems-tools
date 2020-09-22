@@ -123,7 +123,7 @@ os.chdir(options.dir)
 rtems_repo = git.repo(os.getcwd())
 
 if options.from_git:
-  for directory in ['rtems', 'rtems-tools', 'rtems-source-builder']:
+  for directory in ['rtems-source-builder', 'rtems', 'rtems-examples']:
     vprint('Cloning ' + directory + '...')
     start_time = time.time()
     try:
@@ -143,7 +143,7 @@ else:
     from backports import lzma
     from contextlib import closing
 
-  for directory in ['rtems', 'rtems-tools', 'rtems-source-builder']:
+  for directory in ['rtems-source-builder', 'rtems', 'rtems-examples']:
     vprint('Downloading '+options.release_url + '/sources/' + directory+'-' + options.tag + '.tar.xz...')
     wget.download(options.release_url + '/sources/' + directory+'-' + options.tag + '.tar.xz',options.dir)
     vprint('Done...')
