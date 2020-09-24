@@ -1,0 +1,289 @@
+#! /bin/sh
+#
+# Simple script to build CPU/BSP
+#
+# Must be edited to change configure settings
+
+progname=${0##*/}        # fast basename hack for ksh, bash
+
+USAGE=\
+"usage: $progname [ -opts ] arch bsp
+  -v               verbose (default=no)
+  -R               RTEMS directory (default=rtems)
+  -T               Top of working directory (default=${HOME}/rtems-work)
+  -V               version (default=5)
+  -r               run tests (default=no)
+  -e               email test results (default=no)
+  -j NN            make jobs (default=24)
+  -D               enable RTEMS debug (default=no)
+  -P               enable RTEMS profiling (default=no)
+  -t               enable RTEMS tests (default=samples only)
+  -s               enable SMP (default=no)
+  -m               enable multiprocessingo (default=no)
+  -p               disable POSIX (default=enabled)
+  -n               enable legacy networking (default=disabled)
+  -c               disable C++ (default=enabled)
+  -a               do autoconf build (default=enabled)
+  -w               do waf build (default=disabled)
+"
+
+#   log an error to stderr
+prerr()
+{
+    echo "$*" >&2
+}
+
+fatal() {
+    [ "$1" ] && prerr $*
+    prerr "$USAGE"
+    exit 1
+}
+
+warn() {
+    [ "$1" ] && prerr $*
+}
+
+check_status()
+{
+  if [ $1 -ne 0 ] ; then
+    shift 
+    echo "FAILED: " "$*" >&2
+    exit 1
+  fi
+}
+
+
+# Default Behavioral variables to set
+verbose="no"
+do_run="no"
+do_mail="no"
+jobs=24
+do_size_report=no
+DEBUG="--disable-rtems-debug"
+PROFILING="--disable-profiling"
+TESTS="--enable-tests=samples"
+SMP="--disable-smp"
+MP="--disable-multiprocessing"
+POSIX="--enable-posix"
+NET="--disable-networking"
+CXX="--enable-cxx"
+RTEMS_VERSION=5
+RTEMSDIR=${RTEMSDIR:-rtems}
+BUILD_TOP=${BUILD_TOP:-${HOME}/rtems-work}
+
+echo $RTEMSDIR
+
+while getopts "vR:T:V:j:crmMnpstDPS:a|w" OPT
+do
+ case "$OPT" in
+   T) BUILD_TOP=${OPTARG} ;;
+   R) RTEMSDIR=${OPTARG} ;;
+   V) RTEMS_VERSION=${OPTARG} ;;
+   v) verbose="yes";;
+   m) do_mail="yes" ;;
+   j) jobs="$OPTARG";;
+   n) NET="--enable-networking" ;;
+   r) do_run="yes" ;;
+   D) DEBUG="--enable-rtems-debug" ;;
+   P) PROFILING="--enable-profiling" ;;
+   t) TESTS="--enable-tests" ;;
+   s) SMP="--enable-smp" ;;
+   M) MP="--enable-multiprocessing" ;;
+   p) POSIX="--disable-posix" ;;
+   c) CXX="--disable-cxx" ;;
+   S) do_size_report="yes" ;;
+   a) [ -n "$BUILD" ] && fatal || BUILD="autoconf" ;;
+   w) [ -n "$BUILD" ] && fatal || BUILD="waf" ;;
+   *) fatal;;
+ esac
+done
+
+if [ $RTEMS_VERSION = 5 -a $BUILD = "waf" ] ; then
+  echo RTEMS version 5 did not use the waf build system. Use the -a flag instead.
+  exit 1
+fi
+
+RTEMS_TESTER_DIR=${BUILD_TOP}/rtems-tools/
+RTEMS_TOOLS_DIR=${BUILD_TOP}/tools/${RTEMS_VERSION}
+BSP_INSTALL=${RTEMS_TOOLS_DIR}/bsp-install
+
+shiftcount=`expr $OPTIND - 1`
+shift $shiftcount
+
+CPU=$1
+BSP=$2
+
+case ${RTEMS_VERSION} in
+  5|6) ;;
+  *)   fatal "Version must be 5 or 6" ;;
+esac  
+
+for d in ${BUILD_TOP} ${RTEMS_TOOLS_DIR}/bin \
+	 ${RTEMS_TESTER_DIR}/tester ${RTEMSDIR}
+do
+  echo ${d}
+  if [ ! -d ${d} ] ; then 
+    echo "${d} does not exist"
+    exit 1
+  fi
+done
+
+if [ $BUILD = "autoconf" ] ; then
+  if [ ! -r ${RTEMSDIR}/configure ] ; then
+    echo "${RTEMSDIR} is not bootstrapped"
+    exit 1
+  fi
+fi
+
+case ${jobs} in
+  "");;
+  [1-9]) ;;
+  [1-9][0-9]) ;;
+  0)
+    echo "Zero cores does not make sense"
+    exit 1
+    ;;
+  *)  
+    echo "Make jobs specified (${jobs}) is either not a valid"
+    echo "  number or supported quantity."
+    exit 1
+esac 
+
+type ${CPU}-rtems${RTEMS_VERSION}-gcc >/dev/null 2>&1
+if [ $? -ne 0 ] ; then
+  echo "The RTEMS tools for ${CPU}-rtems${RTEMS_VERSION} are not in your PATH"
+  exit 1
+fi
+
+if [ ${verbose} = "yes" ] ; then
+  echo "Top Directory:      " ${BUILD_TOP}
+  echo "RTEMS Directory:    " ${RTEMSDIR}
+  echo "RTEMS Version:      " ${RTEMS_VERSION}
+  echo "RTEMS Debug Arg :   " ${DEBUG}
+  echo "RTEMS Profile Arg:  " ${PROFILING}
+  echo "RTEMS Test Arg:     " ${TESTS}
+  echo "RTEMS SMP Arg:      " ${SMP}
+  echo "RTEMS MP Arg:       " ${MP}
+  echo "RTEMS POSIX Arg:    " ${POSIX}
+  echo "RTEMS Network Arg:  " ${NET}
+  echo "RTEMS C++ Arg:      " ${CXX}
+  echo "Run tests:          " ${do_run}
+  echo "Mail test results : " ${do_mail}
+  echo "Make jobs:          " ${jobs}
+  echo "Print Size Report : " ${do_size_report}
+  echo 
+fi
+
+rm -rf b-${BSP}
+mkdir -p bsp-install/b-${BSP}
+cd bsp-install/b-${BSP}
+
+echo "Using ${RTEMSDIR} for RTEMS source"
+# CONSOLE_ARGS="USE_COM1_AS_CONSOLE=1"
+case ${BSP} in 
+  deos)      PARAVIRT=--enable-paravirt ;;
+  #erc32)     EXTRA_ARGS="CONSOLE_USE_INTERRUPTS=" ;;
+  pc*)        EXTRA_ARGS="IDE_USE_PRIMARY_INTERFACE=0" ;;
+  rv*_spike) EXTRA_ARGS="CPPFLAGS=-DRISCV_ENABLE_HTIF_SUPPORT=1" ;;
+  lm3s3749|lm3s6965) EXTRA_ARGS="OPERATION_COUNT=10" ;;
+  lm4f120)           EXTRA_ARGS="OPERATION_COUNT=10" ;;
+  *)         ;;
+esac
+
+# Check if the BSP is a "rtems_test" name and see if we can test it
+BUILD_BSP=${BSP}
+case ${BSP} in
+  arm1136jfs|arm1136js|arm7tdmi|arm920|armcortexa9) ableToRun=yes ;;
+  xilinx_zynq_a9_qemu)     ableToRun=yes ;;
+  realview_pbx_a9_qemu)    ableToRun=yes ;;
+  bf537Stamp)              ableToRun=yes ;; 
+  griscv-sis)              ableToRun=yes ; BUILD_BSP=griscv  ;;
+  h8sim|h8sxsim)           ableToRun=yes ;;
+  pc*)                     ableToRun=yes ; BSP=pc-qemu ;;
+  jmr3904)                 ableToRun=yes ;;
+  psim)                    ableToRun=yes ;;
+  lm32_evr*)               ableToRun=yes ;;
+  m32c*)                   ableToRun=yes ;;
+  m32r*)                   ableToRun=yes ;;
+  rv32iac_spike)           ableToRun=yes ; BUILD_BSP=rv32iac ;;
+  rv32imac_spike)          ableToRun=yes ; BUILD_BSP=rv32imac ;;
+  rv32imafc_spike)         ableToRun=yes ; BUILD_BSP=rv32imafc ;;
+  rv32imafdc_spike)        ableToRun=yes ; BUILD_BSP=rv32imafdc ;;
+  rv32imafd_spike)         ableToRun=yes ; BUILD_BSP=rv32imafd ;;
+  rv32im_spike)            ableToRun=yes ; BUILD_BSP=rv32im ;;
+  rv32i_spike)             ableToRun=yes ; BUILD_BSP=rv32i ;;
+  rv64imac_medany_spike)   ableToRun=yes ; BUILD_BSP=rv64imac_medany ;;
+  rv64imac_spike)          ableToRun=yes ; BUILD_BSP=rv64imac ;;
+  rv64imafdc_medany_spike) ableToRun=yes ; BUILD_BSP=rv64imafdc_medany ;;
+  rv64imafdc_spike)        ableToRun=yes ; BUILD_BSP=rv64imafdc ;;
+  rv64imafd_medany_spike)  ableToRun=yes ; BUILD_BSP=rv64imafd_medany ;;
+  rv64imafd_spike)         ableToRun=yes ; BUILD_BSP=rv64imafd ;;
+  generic_or1k)            ableToRun=yes ;;
+  simsh*)                  ableToRun=yes ;;
+  erc32|erc32-sis)         ableToRun=yes ; BSP=erc32-sis; BUILD_BSP=erc32 ;;
+  leon2|leon2-sis)         ableToRun=yes ; BSP=leon2-sis; BUILD_BSP=leon2 ;;
+  leon3|leon3-sis)         ableToRun=yes ; BSP=leon3-sis; BUILD_BSP=leon3 ;;
+  sis|erc32|leon2|leon3)   ableToRun=yes ;;
+  v850*)                   ableToRun=yes ;;
+  *)                       ableToRun=no  ;;
+esac
+
+echo Testing: ${CPU} ${BSP}
+echo BSP to Build: ${BUILD_BSP}
+
+# if the bsp is being built using autoconf
+if [ $BUILD = "autoconf" ] ; then
+   # Now invoke configure and make using the arguments selected
+  ../${RTEMSDIR}/configure --target=${CPU}-rtems${RTEMS_VERSION} \
+     --enable-rtemsbsp=${BUILD_BSP} ${EXTRA_ARGS} ${PARAVIRT} \
+    --prefix=${BSP_INSTALL} \
+    ${NET} ${POSIX} ${SMP} ${MP} ${DEBUG} ${PROFILING} ${TESTS} ${CXX} \
+    --enable-maintainer-mode \
+   >c.log 2>&1 && \
+  time make -j${jobs} >b.log 2>&1 
+  status=$?
+# if the bsp is being built using waf
+elif [ $BUILD = "waf" ] ; then
+  # configure waf
+  cd $BUILD_TOP/rtems
+  # XXX ensure waf is in the current directory
+  echo "[$CPU/$BSP]" > config.ini
+  echo "BUILD_TESTS = True" >> config.ini
+  ./waf configure --prefix=$BUILD_TOP/bsp-install/b-${BSP}
+  # build the bsp
+  ./waf
+  # install the bsp
+  ./waf install
+else
+  echo BUILD is neither waf nor autoconf. It is $BUILD . Exiting...
+  exit 1
+fi
+
+# If able to test, then test and optionally mail results
+if [ ${do_run} = "yes" -a ${status} -eq 0 ] ; then
+
+  if [ "${ableToRun}" = "yes" ] ; then
+    if [ ${do_mail} = "yes" ] ; then
+      MAILARGS="--mail --mail-from=joel@rtems.org --mail-to=build@rtems.org"
+    fi
+    time ${RTEMS_TESTER_DIR}/tester/rtems-test \
+      --rtems-tools=${RTEMS_TOOLS_DIR} \
+      --rtems-bsp=${BSP} \
+      --log=run.log \
+      ${MAILARGS} .
+    status=$?
+  fi
+fi
+
+if [ ${status} -eq 0 -a ${do_size_report} = "yes" ] ; then
+  # print the header followed by all the test sizes
+  ${CPU}-rtems${RTEMS_VERSION}-size `find . -name "hello.exe"` | head -1
+  find . -name "*.exe"  | while read f
+  do
+    (cd `dirname ${f} `; ${CPU}-rtems${RTEMS_VERSION}-size `basename ${f}`)
+  done | grep "\.exe"
+fi
+
+echo $status
+exit $status
+

@@ -134,7 +134,7 @@ def yes_or_no(val):
   else:
     return 'no'
 
-master_version = '6' # don't know if I need this or not yet
+master_version = '6'
 
 # verify that Top directory exists
 if not os.path.isdir(options.top):
@@ -288,7 +288,7 @@ def do_rsb_build_tools(version):
       ' --keep-going ' +\
       '--log=l-' + rcpu + '-' + version + '.txt ' +\
       '--prefix=' + options.top + '/tools/' + version + ' ' +\
-      r + ' o-' + rcpu + '-' + version + '.txt 2>&1\n' \
+      r + '>o-' + rcpu + '-' + version + '.txt 2>&1\n' \
       )
     else:
       vprint('Building the tools for ' + rcpu + '...')
@@ -451,7 +451,8 @@ def do_bsp_builder():
     print('BSP builder failed. ', file=sys.stderr)
     sys.exit(1)
 
-os.environ['PATH'] = options.top + '/tools/' + str(options.version) + '/bin' + os.environ['PATH']
+# double check this
+os.environ['PATH'] = options.top + '/tools/' + str(options.version) + '/bin:' + os.environ['PATH']
 
 # Build RTEMS ${version}.x tools if needed
 if rsb_updated:
@@ -505,9 +506,31 @@ def test_single_bsp(cpu, bsp, SMP_ARGS=''):
       BB_ARGS + ' ' + SMP_ARGS + ' -D ' + cpu + ' ' + bsp \
     )
     return
+    # need to add an argument to build_bsp as to whether it's going to use waf or autoconf
   if cmd_exists(cpu + '-rtems' + options.version + '-gcc'):
+    # do autoconf builds
     subprocess.call([
+      exedir() + '/build_bsp', # these are doing autoconf builds, add -A (autoconf) -w (waf)
+      '-V',
+      options.version,
+      BB_ARGS,
+      SMP_ARGS,
+      cpu,
+      bsp
+    ])
+    result = subprocess.call([
       exedir() + '/build_bsp',
+      '-V',
+      options.version,
+      BB_ARGS,
+      SMP_ARGS,
+      '-D',
+      cpu,
+      bsp
+    ])
+    # do waf builds
+    subprocess.call([
+      exedir() + '/build_bsp', # these are doing autoconf builds, add -A (autoconf) -w (waf)
       '-V',
       options.version,
       BB_ARGS,
@@ -596,31 +619,3 @@ script_end = datetime.datetime.now()
 print('START: ', script_start)
 print('END:   ', script_end)
 sys.exit(0)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
