@@ -84,12 +84,6 @@ parser.add_option(
   default=False,
   help='verbose (default=no)'
 )
-parser.add_option(
-  '-V',
-  dest='version',
-  default=5,
-  help='RTEMS version (default=5)'
-)
 
 # options contains values for each of the arguments passed in
 # args contains positional arguments leftover afer parsing options
