@@ -15,6 +15,7 @@
 from __future__ import print_function
 
 import datetime
+import logging
 import os
 import subprocess
 import sys
@@ -34,10 +35,7 @@ script_start = datetime.datetime.now()
   
 description = '''Runs all of the build tests'''
 
-# will have to check if on branch 5 and if waf is specified because it won't work
 # if build bsp fails, there will be a b.log that needs to be mailed
-# will have to convert build bsp to python as well, will be able to invoke it as a subroutine
-# make it a class that will have command line arguments
 parser = OptionParser(
   usage='usage: %prog [OPTIONS]',
   description=description
@@ -116,8 +114,21 @@ parser.add_option(
   default=1,
   help='Execute a certain step (default=1)'
 )
+parser.add_option(
+  '-l',
+  dest='log_path',
+  default=os.environ['HOME'] + '/rtems-cron',
+  help='Path to log file (default=$HOME/rtems-cron)'
+)
 
 (options, args) = parser.parse_args(sys.argv)
+
+# create log file
+logging.basicConfig(
+  filename=options.log_path,
+  level=logging.DEBUG,
+  format='%(levelname)s:%(asctime)s:%(message)s'
+  )
 
 def vprint(string):
   if options.verbose:
@@ -140,12 +151,23 @@ def yes_or_no(val):
     return 'yes'
   else:
     return 'no'
+    
+def info(string):
+  logging.info(string)
+  
+def log(status, msg):
+  if status == 0:
+    logging.info('PASSED ' + msg)
+  else:
+    logging.error('FAILED(' + str(status) + ') ' + msg)
 
 master_version = '6'
 
 # verify that Top directory exists
 if not os.path.isdir(options.top):
-  print('The top directory, ' + options.top + ', does not exist.', file=sys.stderr)
+  print('The top directory, ' + options.top + \
+        ', does not exist.', file=sys.stderr
+  )
   print('Run rtems-cron-prepdir.py before this script!', file=sys.stderr)
   sys.exit(1)
 
@@ -153,12 +175,9 @@ os.chdir(options.top)
 
 # verify that arguments make sense
 
-# may consolidate the updating process into a function
-
 if options.version == '5' and options.waf_build:
   print('WAF was not the build system used with RTEMS 5.', file=sys.stderr)
   sys.exit(1)
-# may check some other comparison of arguments
 
 rsb_updated = False
 rtems_updated = False
@@ -177,24 +196,29 @@ if os.path.isdir(options.top + '/rtems') and \
       
       rsb_repo = git.repo(os.getcwd())
       
-      # determine what branch we're on and determine if we need to checkout a different one
+      # determine what branch we're on and determine if we need to checkout a 
+      # different one
       if (rsb_repo.branch() != options.version) and \
          (options.version != master_version):
         try:
           rsb_repo.checkout(options.version)
         except:
-          print('An error occured when trying to checkout branch ' + options.version + '...')
+          print('An error occured when trying to checkout branch ' + \
+          options.version + '...'
+          )
           sys.exit(1)
       
       rsb_repo.fetch()
       
-      # verify with Joel that this looks right
       if options.version == master_version:
         result = rsb_repo._run(['rev-list', 'HEAD...master', '--count'])
       else:
-        result = rsb_repo._run(['rev-list', 'HEAD...' + options.version, '--count'])
+        result = rsb_repo._run([
+          'rev-list', 'HEAD...' + options.version, '--count'])
         
       result = int(result[1]) # the number of revisions behind
+      
+      info('RSB had {} revision(s) to update'.format(result))
       
       if result != 0:
         vprint('Pulling rtems_source_builder...')
@@ -206,13 +230,16 @@ if os.path.isdir(options.top + '/rtems') and \
 
       rtems_repo = git.repo(os.getcwd())
       
-      # determine what branch we're on and determine if we need to checkout a different one
+      # determine what branch we're on and determine if we need to checkout a 
+      # different one
       if (rtems_repo.branch() != options.version) and \
          (options.version != master_version):
         try:
           rtems_repo.checkout(options.version)
         except:
-          print('An error occured when trying to checkout branch ' + options.version + '...')
+          print('An error occured when trying to checkout branch ' + \
+                options.version + '...'
+          )
           sys.exit(1)
       
       rtems_repo.fetch()
@@ -220,9 +247,12 @@ if os.path.isdir(options.top + '/rtems') and \
       if options.version == master_version:
         result = rtems_repo._run(['rev-list', 'HEAD...master', '--count'])
       else:
-        result = rtems_repo._run(['rev-list', 'HEAD...' + options.version, '--count'])
+        result = rtems_repo._run([
+          'rev-list', 'HEAD...' + options.version, '--count'])
         
       result = int(result[1]) # the number of revisions behind
+      
+      info('rtems had {} revision(s) to update'.format(result))
       
       if result != 0:
         vprint('Pulling rtems...')
@@ -233,7 +263,10 @@ if os.path.isdir(options.top + '/rtems') and \
       os.chdir('..')
       
     else:
-      print('All \'.git\' directories not present. Clean up and rerun prepdir!', file=sys.stderr)
+      print(
+        'All \'.git\' directories not present. Clean up and rerun prepdir!',
+        file=sys.stderr
+      )
       sys.exit(1)
     
 # if the user wants to force an update
@@ -242,12 +275,6 @@ if options.force_build:
   rtems_updated = True
   if options.verbose:
     print('Forcing builds whether or not there are updates')
-    
-# if the user wants the results sent in an email
-if options.send_email:
-  RSB_MAIL_ARGS = '--mail --mail-to=' + options.to_addr + ' --mail-from=' + options.from_addr + ' '
-else:
-  RSB_MAIL_ARGS = ''
   
 vprint('Git Update: ' + yes_or_no(options.git))
 vprint('Forced Update: ' + yes_or_no(options.force_build))
@@ -275,7 +302,8 @@ def do_rsb_build_tools(version):
     rmtree(options.top + '/tools')
 
   if not os.path.isfile('./config/' + str(version) + '/rtems-all.bset'):
-    print(options.top + '/rtems-source-builder/rtems/config/' + str(version) + '/rtems-all.bset', end='', file=sys.stderr)
+    print(options.top + '/rtems-source-builder/rtems/config/' + \
+          str(version) + '/rtems-all.bset', end='', file=sys.stderr)
     print(' does not exist.', file=sys.stderr)
     sys.exit(1)
 
@@ -284,7 +312,7 @@ def do_rsb_build_tools(version):
   with open('./config/' + str(version) + '/rtems-all.bset') as f:
     rset = [line.rstrip() for line in f]
   """
-  rset = ['6/rtems-sparc']
+  rset = [str(options.version) + '/rtems-sparc']
 
   start_time = time.time()
   
@@ -296,11 +324,12 @@ def do_rsb_build_tools(version):
     if testing:
       print(
       '\ntime ../source-builder/sb-set-builder ' +\
-      RSB_MAIL_ARGS +\
+      '--mail --mail-to=' + options.to_addr + \
+      ' --mail-from=' + options.from_addr + \
       ' --keep-going ' +\
       '--log=l-' + rcpu + '-' + version + '.txt ' +\
       '--prefix=' + options.top + '/tools/' + version + ' ' +\
-      r + '>o-' + rcpu + '-' + version + '.txt 2>&1\n' \
+      r + ' >o-' + rcpu + '-' + version + '.txt 2>&1\n' \
       )
     else:
       if step == 1:
@@ -310,9 +339,11 @@ def do_rsb_build_tools(version):
         if options.send_email:
           result = subprocess.call([
             '../source-builder/sb-set-builder',
-            RSB_MAIL_ARGS,
+            '--mail',
+            '--mail-to=' + options.to_addr,
+            '--mail-from=' + options.from_addr,
             '--keep-going',
-            '--log=l' + rcpu + '-' + version,
+            '--log=l-' + rcpu + '-' + version,
             '--prefix=' + options.top + '/tools/' + version,
             r],
             stdout=outfile,
@@ -322,20 +353,26 @@ def do_rsb_build_tools(version):
           result = subprocess.call([
             '../source-builder/sb-set-builder',
             '--keep-going',
-            '--log=l' + rcpu + '-' + version,
+            '--log=l-' + rcpu + '-' + version,
             '--prefix=' + options.top + '/tools/' + version,
             r],
             stdout=outfile,
             stderr=outfile
           )
         outfile.close()
+        log(result, 'RSB build of ' + r)
 
     call_end_time = time.time()
     vprint('Done...')
-    vprint('Building the tools for ' + rcpu + ' took ' + str(call_end_time - call_beg_time) + ' seconds...')
+    vprint('Building the tools for ' + rcpu + ' took ' + \
+           str(call_end_time - call_beg_time) + ' seconds...'
+    )
 
   end_time = time.time()
-  vprint('\n\nBuilding all of the tools took ' + str(end_time - start_time) + ' seconds.') # figure out how to display this in minutes or something
+  # figure out how to display this in minutes or something
+  vprint('\n\nBuilding all of the tools took ' + \
+          str(end_time - start_time) + ' seconds.'
+  ) 
 
   # if the basic cross-compilation of the tools failed
   if result != 0:
@@ -343,7 +380,6 @@ def do_rsb_build_tools(version):
     sys.exit(1)
     
   # comment out if not building in steps
-  # might make a value to make it to where it'll increment it and continue on with the build'
   if step == 1:
     print('Done with step 1 (building tools)')
     sys.exit(0)
@@ -356,7 +392,8 @@ def do_rsb_build_tools(version):
   if testing:
     print(
       '\n../source-builder/sb-set-builder ' + \
-      RSB_MAIL_ARGS +\
+      '--mail --mail-to=' + options.to_addr + \
+      '--mail-from=' + options.from_addr + \
       ' --log=l-dtc-' + options.version +'.txt' +\
       '--prefix=' + options.top + '/tools/' + version +\
       ' devel/dtc >l-dtc-' + options.version + '.txt 2>&1\n'
@@ -370,7 +407,9 @@ def do_rsb_build_tools(version):
       if options.send_email:
         result = subprocess.call([
             '../source-builder/sb-set-builder',
-            RSB_MAIL_ARGS,
+            '--mail',
+            '--mail-to=' + options.to_addr,
+            '--mail-from=' + options.from_addr,
             '--log=l-dtc-' + version + '.txt',
             '--prefix=' + options.top + '/tools/' + version,
             'devel/dtc'],
@@ -387,6 +426,7 @@ def do_rsb_build_tools(version):
             stderr=outfile
           )
       outfile.close()
+      log(result, 'RSB build of devel/dtc')
 
   # put that call in a subprocess call
   end_time = time.time()
@@ -407,10 +447,11 @@ def do_rsb_build_tools(version):
   os.chdir(options.top + '/rtems-source-builder/bare')
   if testing:
     print(
-      '\n../source-builder/sb-set-builder ' +\
-      RSB_MAIL_ARGS +\
-      '--log=l-spike-' + version + '.txt' +\
-      '--prefix=' + options.top + '/tools/' + version +\
+      '\n../source-builder/sb-set-builder ' + \
+      '--mail --mail-to=' + options.to_addr + \
+      '--mail-from=' + options.from_addr + \
+      '--log=l-spike-' + version + '.txt' + \
+      '--prefix=' + options.top + '/tools/' + version + \
       'devel/spike >l-spike-' + version + '.txt 2>&1\n'
     )
 
@@ -422,7 +463,9 @@ def do_rsb_build_tools(version):
       if options.send_email:
         result = subprocess.call([
             '../source-builder/sb-set-builder',
-            RSB_MAIL_ARGS,
+            '--mail',
+            '--mail-to=' + options.to_addr,
+            '--mail-from=' + options.from_addr,
             '--log=l-spike-' + version + '.txt',
             '--prefix=' + options.top + '/tools/' + version,
             'devel/spike'],
@@ -435,10 +478,11 @@ def do_rsb_build_tools(version):
           '--log=l-spike-' + version + '.txt',
           '--prefix=' + options.top + '/tools/' + version,
           'devel/spike'],
-          stdout=outfile
+          stdout=outfile,
           stderr=outfile
         )
       outfile.close()
+      log(result, 'RSB build of devel/spike')
 
   end_time = time.time()
   vprint('Running the Spike RISC-V Simulator took ' + str(end_time - start_time) + ' seconds.')
@@ -459,10 +503,11 @@ def do_rsb_build_tools(version):
   
   if testing:
     print(
-      '\n../source-builder/sb-set-builder ' +\
-      RSB_MAIL_ARGS +\
-      ' --log=l-qemu-' + version + '.txt' +\
-      '--prefix=' + options.top + '/tools/' + version +\
+      '\n../source-builder/sb-set-builder ' + \
+      '--mail --mail-to=' + options.to_addr + \
+      '--mail-from=' + options.from_addr + \
+      ' --log=l-qemu-' + version + '.txt' + \
+      '--prefix=' + options.top + '/tools/' + version + \
       'devel/qemu4 >l-qemu4-' + version + '.txt 2>&1\n'
     )
   
@@ -474,7 +519,9 @@ def do_rsb_build_tools(version):
       if options.send_email:
         result = subprocess.call([
             '../source-builder/sb-set-builder',
-            RSB_MAIL_ARGS,
+            '--mail',
+            '--mail-to=' + options.to_addr,
+            '--mail-from=' + options.from_addr,
             '--log=l-qemu-' + version + '.txt',
             '--prefix=' + options.top + '/tools/' + version,
             'devel/qemu4'],
@@ -491,6 +538,7 @@ def do_rsb_build_tools(version):
             stderr=outfile
           )
       outfile.close()
+      log(result, 'RSB build of devel/qemu4')
 
   end_time = time.time()
   vprint('Running Qemu Simulator took ' + str(end_time - start_time) + ' seconds.')
@@ -501,7 +549,7 @@ def do_rsb_build_tools(version):
     sys.exit(1)
     
   if step == 4:
-    print('Done with step 4 ()')
+    print('Done with step 4 (building Qemu4 Simulator)')
     sys.exit(0)
 
 def do_bsp_builder():
@@ -509,13 +557,14 @@ def do_bsp_builder():
 
   if testing:
     print(
-      '\n' + options.top + '/rtems-tools/tester/rtems-bsp-builder ' +\
-      '--rtems=' + options.top + '/rtems ' +\
-      '--build-path=' + options.top + '/build ' +\
-      '--prefix=' + options.top + '/tools/' + options.version + '/bsps ' +\
-      '--log=build.log ' +\
-      '--warnings-report=warnings.log ' +\
-      RSB_MAIL_ARGS +\
+      '\n' + options.top + '/rtems-tools/tester/rtems-bsp-builder ' + \
+      '--rtems=' + options.top + '/rtems ' + \
+      '--build-path=' + options.top + '/build ' + \
+      '--prefix=' + options.top + '/tools/' + options.version + '/bsps ' + \
+      '--log=build.log ' + \
+      '--warnings-report=warnings.log ' + \
+      '--mail --mail-to=' + options.to_addr + \
+      '--mail-from=' + options.from_addr + \
       ' --profiles=everything'
     )
   
@@ -528,12 +577,15 @@ def do_bsp_builder():
       '--prefix=' + options.top + '/tools/' + options.version + '/bsps',
       '--log=build.log',
       '--warnings-report=warnings.log',
-        RSB_MAIL_ARGS,
-        '--profiles=everything',
+      '--mail',
+      '--mail-to=' + options.to_addr,
+      '--mail-from=' + options.from_addr,
+      '--profiles=everything',
     ])
 
   end_time = time.time()
   vprint('BSP builder took ' + str(end_time - start_time) + ' seconds.')
+  log(result, 'rtems-bsp-builder build of everything')
 
   if result != 0:
     print('BSP builder failed. ', file=sys.stderr)
@@ -574,72 +626,67 @@ else:
     print('rtems-bootstrap failed. ', file=sys.stderr)
     sys.exit(1)
 
-if options.send_email:
-  MAIL_ARG = '-m'
-else:
-  MAIL_ARG = ''
-
 BB_ARGS = '-T ' + options.top + '-v -r ' + MAIL_ARG + ' -t'
 
-def test_single_bsp(cpu, bsp, SMP_ARGS=''):
-  if 0:
-    print( \
-      exedir() + '/build_bsp' + ' ' + \
-      '-V ' + options.version + ' ' + \
-      BB_ARGS + ' ' + SMP_ARGS + ' ' + cpu + ' ' + bsp \
-    )
-    print( \
-      exedir() + '/build_bsp' + ' ' + \
-      '-V ' + options.version + ' ' + \
-      BB_ARGS + ' ' + SMP_ARGS + ' -D ' + cpu + ' ' + bsp \
-    )
-    return
-    # need to add an argument to build_bsp as to whether it's going to use waf or autoconf
-  print('cmd_exists: ' + str(cmd_exists(cpu + '-rtems' + options.version + '-gcc')))
-  if cmd_exists(cpu + '-rtems' + options.version + '-gcc'):
-    # do autoconf builds
-    subprocess.call([
-      exedir() + '/build_bsp', # these are doing autoconf builds, add -A (autoconf) -w (waf)
-      '-V',
-      options.version,
-      BB_ARGS,
-      SMP_ARGS,
-      cpu,
-      bsp
-    ])
-    result = subprocess.call([
-      exedir() + '/build_bsp',
-      '-V',
-      options.version,
-      BB_ARGS,
-      SMP_ARGS,
-      '-D',
-      cpu,
-      bsp
-    ])
-    # do waf builds
-    subprocess.call([
-      exedir() + '/build_bsp', # these are doing autoconf builds, add -A (autoconf) -w (waf)
-      '-V',
-      options.version,
-      BB_ARGS,
-      SMP_ARGS,
-      cpu,
-      bsp
-    ])
-    result = subprocess.call([
-      exedir() + '/build_bsp',
-      '-V',
-      options.version,
-      BB_ARGS,
-      SMP_ARGS,
-      '-D',
-      cpu,
-      bsp
-    ])
+def generate_arguments(build_system, cpu_and_bsp):
+  BB_ARGS = [build_system, '-T', options.top, '-v', '-r']
+  
+  # add the mailing flag
+  if options.send_email:
+    BB_ARGS.append('-m')
 
-    if result == 0:
-      rmtree('b-' + bsp)
+  BB_ARGS.append('-t')
+  ARGS1 = [exedir() + '/build_bsp', '-V', options.version] + BB_ARGS
+  
+  if SMP_ARG != '':
+    ARGS1 += SMP_ARG
+
+  ARGS2 = ARGS1.copy()
+  ARGS1 += cpu_and_bsp
+  ARGS2.append('-D')
+  ARGS2 += cpu_and_bsp
+  
+  ARGS = [ARGS1, ARGS2]
+  
+  return ARGS
+
+def test_single_bsp(cpu, bsp, SMP_ARG=''):
+    
+  print('cmd_exists: ' + \
+        str(cmd_exists(cpu + '-rtems' + options.version + '-gcc'))
+  )
+
+  if cmd_exists(cpu + '-rtems' + options.version + '-gcc'):
+  
+    arch_and_bsp = [cpu, bsp]
+      
+    # (NO DEBUG) if this RTEMS version has a autoconf build, then build it that way
+    if 'configure.ac' in os.listdir(options.top + '/rtems'):
+      AC_ARGS = generate_arguments('-a', arch_and_bsp)
+      result = subprocess.call(AC_ARGS[0])
+      log(result, 'autoconf build of {} {}'.format(cpu, bsp))
+
+    # (NO DEBUG) if this RTEMS version has a waf build, then build it that way
+    if 'waf' in os.listdir(options.top + '/rtems'):
+      WAF_ARGS = generate_arguments('-w', arch_and_bsp)
+      result = subprocess.call(WAF_ARGS[0])
+      log(result, 'waf build of {} {}'.format(cpu, bsp))
+      
+    # (DEBUG) if this RTEMS version has a autoconf build, then build it that way
+    if 'configure.ac' in os.listdir(options.top + '/rtems'):
+      result = subprocess.call(AC_ARGS[1])
+      log(result, 'autoconf build of {} {} (DEBUG)'.format(cpu, bsp))
+      
+    # (DEBUG) if this RTEMS version has a waf build, then build it that way
+    if 'waf' in os.listdir(options.top + '/rtems'):
+      result = subprocess.call(WAF_ARGS[1])
+      log(result, 'waf build of {} {} (DEBUG)'.format(cpu, bsp))
+      
+      if result == 0:
+        prev_dir = os.getcwd()
+        os.chdir(options.top + '/rtems')
+        subprocess.call(['./waf', 'distclean'])
+        os.chdir(prev_dir)
 
   else:
     print('WARNING - no gcc for ' + cpu + ' ' + bsp)
@@ -659,10 +706,10 @@ if rsb_updated or rtems_updated:
 
   # Make sure Spike is available for these BSPs
   if cmd_exists('spike'):
-    bsps = ['rv32iac_spike', 'rv32imac_spike', 'rv32imafc_spike', \
-    'rv32imafdc_spike', 'rv32imafd_spike', 'rv32im_spike', 'rv32i_spike', \
-    'rv64imac_medany_spike', 'rv64imac_spike', 'rv64imafdc_medany_spike', \
-    'rv64imafdc_spike', 'rv64imafd_medany', 'rv64imafd_medany_spike', \
+    bsps = ['rv32iac_spike', 'rv32imac_spike', 'rv32imafc_spike',
+    'rv32imafdc_spike', 'rv32imafd_spike', 'rv32im_spike', 'rv32i_spike',
+    'rv64imac_medany_spike', 'rv64imac_spike', 'rv64imafdc_medany_spike',
+    'rv64imafdc_spike', 'rv64imafd_medany', 'rv64imafd_medany_spike',
     'rv64imafd_spike'
     ]
 
@@ -672,39 +719,50 @@ if rsb_updated or rtems_updated:
     # Now build all supported BSP bset stacks
     os.chdir(options.top + '/rtems-source-builder/rtems')
 
-    bsets = ['atsamv', 'beagleboneblack', 'erc32', 'gr712rc', 'gr740', 'imx7',\
-     'pc', 'qoriq_e500', 'qoriq_e6500_32', 'qoriq_e6500_64', 'raspberrypi2',\
-      'xilinx_zynq_zc702', 'xilinx_zynq_zc706', 'xilinx_zynq_zedboard']
+    bsets = ['atsamv', 'beagleboneblack', 'erc32', 'gr712rc', 'gr740', 'imx7',
+     'pc', 'qoriq_e500', 'qoriq_e6500_32', 'qoriq_e6500_64', 'raspberrypi2',
+      'xilinx_zynq_zc702', 'xilinx_zynq_zc706', 'xilinx_zynq_zedboard'
+    ]
 
     for bset in bsets:
       bset_start_time = time.time()
       
       if testing:
         print( \
-          '../source-builder/sb-set-builder ' + RSB_MAIL_ARGS + \
-          '--log=l-' + bset + '-' + options.version + '.txt ' + \
+          '../source-builder/sb-set-builder ' + \
+          '--mail --mail-to=' + options.to_addr + \
+          '--mail-from=' + options.from_addr + \
+          ' --log=l-' + bset + '-' + options.version + '.txt ' + \
           '--prefix=' + options.top + '/tools/' + options.version + ' ' + \
           options.version + '/bsps/' + bset + ' ' + \
           '>o-' + bset + '-' + options.version + '.txt' + ' 2>&1'
         )
         
       else:
-        subprocess.call([
+        file_name = 'o-' + bset + '-' + options.version + '.txt'
+        outfile = open(file_name, 'w')
+        result = subprocess.call([
           '../source-builder/sb-set-builder',
-          RSB_MAIL_ARGS,
+          '--mail',
+          '--mail-to=' + options.to_addr,
+          '--mail-from=' + options.from_addr,
           '--log=l-' + bset + '-' + options.version + '.txt',
           '--prefix=' + options.top + '/tools/' + options.version,
-          options.version + '/bsps/' + bset,
-          '>o-' + bset + '-' + options.version + '.txt',
-          '2>&1'
-          ])
+          options.version + '/bsps/' + bset],
+          stdout=outfile,
+          stderr=outfile
+          )
+        log(result, 'RSB build of bsps/' + bset)
 
       bset_end_time = time.time()
-      print('Building all supported BSP bset stacks took' + str(bset_end_time - bset_start_time) + ' seconds.')
+      print('Building all supported BSP bset stacks took' + \
+            str(bset_end_time - bset_start_time) + ' seconds.'
+      )
 
       do_bsp_builder()
 
 script_end = datetime.datetime.now()
+
 print('START: ', script_start)
 print('END:   ', script_end)
 sys.exit(0)
