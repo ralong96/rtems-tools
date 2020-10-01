@@ -249,7 +249,6 @@ if not os.path.isdir(options.top):
 os.chdir(options.top)
 
 # verify that arguments make sense
-# check that end step is not less than start step
 
 # make sure that end step is not less than start steps
 if options.build_in_steps and options.start_step >= options.end_step:
@@ -391,11 +390,10 @@ def do_rsb_build_tools(version):
     sys.exit(1)
 
   # remove the trailing '\n'
-  """
   with open('./config/' + str(version) + '/rtems-all.bset') as f:
     rset = [line.rstrip() for line in f]
-  """
-  rset = [str(options.version) + '/rtems-sparc']
+
+  # rset = [str(options.version) + '/rtems-sparc']
 
   start_time = time.time()
   
@@ -740,7 +738,7 @@ else:
       else:
         step += 1
 
-def generate_arguments(build_system, cpu_and_bsp):
+def generate_arguments(build_system, cpu_and_bsp, SMP_ARG):
   BB_ARGS = [build_system, '-T', options.top, '-v', '-r']
   
   # add the mailing flag
@@ -750,9 +748,12 @@ def generate_arguments(build_system, cpu_and_bsp):
   BB_ARGS.append('-t')
   ARGS1 = [exedir() + '/build_bsp', '-V', options.version] + BB_ARGS
   
+  SMP = "NOSMP"
+  
   # if SMP arg is given, add it
   if SMP_ARG != '':
     ARGS1 += SMP_ARG
+    SMP = 'SMP'
 
   ARGS2 = ARGS1.copy()
   ARGS1 += cpu_and_bsp
@@ -764,10 +765,7 @@ def generate_arguments(build_system, cpu_and_bsp):
   return ARGS
 
 def test_single_bsp(cpu, bsp, SMP_ARG=''):
-    
-  print('cmd_exists: ' + \
-        str(cmd_exists(cpu + '-rtems' + options.version + '-gcc'))
-  )
+  if SMP_ARG != ''
 
   if cmd_exists(cpu + '-rtems' + options.version + '-gcc') or testing:
   
@@ -775,7 +773,7 @@ def test_single_bsp(cpu, bsp, SMP_ARG=''):
       
     # (NO DEBUG) if this RTEMS version has a autoconf build, then build it that way
     if 'configure.ac' in os.listdir(options.top + '/rtems'):
-      AC_ARGS = generate_arguments('-a', arch_and_bsp)
+      AC_ARGS = generate_arguments('-a', arch_and_bsp, SMP_ARG)
       if testing:
         for arg in AC_ARGS[0]:
           print(arg, end=' ')
@@ -783,11 +781,11 @@ def test_single_bsp(cpu, bsp, SMP_ARG=''):
           
       else:
         result = subprocess.call(AC_ARGS[0])
-        log(result, 'autoconf build of {} {}'.format(cpu, bsp))
+        log(result, 'autoconf build of {} {} ({}/NODEBUG)'.format(cpu, bsp, SMP))
 
     # (NO DEBUG) if this RTEMS version has a waf build, then build it that way
     if 'waf' in os.listdir(options.top + '/rtems'):
-      WAF_ARGS = generate_arguments('-w', arch_and_bsp)
+      WAF_ARGS = generate_arguments('-w', arch_and_bsp, SMP_ARG)
       if testing:
         for arg in WAF_ARGS[0]:
           print(arg, end=' ')
@@ -795,7 +793,7 @@ def test_single_bsp(cpu, bsp, SMP_ARG=''):
           
       else:
         result = subprocess.call(WAF_ARGS[0])
-        log(result, 'waf build of {} {}'.format(cpu, bsp))
+        log(result, 'waf build of {} {} ({}/NODEBUG)'.format(cpu, bsp, SMP))
       
     # (DEBUG) if this RTEMS version has a autoconf build, then build it that way
     if 'configure.ac' in os.listdir(options.top + '/rtems'):
@@ -806,7 +804,7 @@ def test_single_bsp(cpu, bsp, SMP_ARG=''):
           
       else:
         result = subprocess.call(AC_ARGS[1])
-        log(result, 'autoconf build of {} {} (DEBUG)'.format(cpu, bsp))
+        log(result, 'autoconf build of {} {} ({}/DEBUG)'.format(cpu, bsp, SMP))
       
     # (DEBUG) if this RTEMS version has a waf build, then build it that way
     if 'waf' in os.listdir(options.top + '/rtems'):
@@ -816,7 +814,7 @@ def test_single_bsp(cpu, bsp, SMP_ARG=''):
         print()
       else:
         result = subprocess.call(WAF_ARGS[1])
-        log(result, 'waf build of {} {} (DEBUG)'.format(cpu, bsp))
+        log(result, 'waf build of {} {} ({}/DEBUG)'.format(cpu, bsp, SMP))
       
         if result == 0:
           prev_dir = os.getcwd()
@@ -920,6 +918,9 @@ if rsb_updated or rtems_updated:
             step_done('build_bsps')
 
 script_end = datetime.datetime.now()
+
+log('START: {}'.format(script_start))
+log('END:   {}'.format(script_end))
 
 print('START: ', script_start)
 print('END:   ', script_end)
