@@ -29,8 +29,6 @@ sys.path.insert(1, starting_directory + '/rtemstoolkit')
 
 from rtemstoolkit import git
 
-testing = False # print the statements rather than running them
-
 script_start = datetime.datetime.now()
   
 description = '''Runs all of the build tests'''
@@ -38,7 +36,8 @@ description = '''Runs all of the build tests'''
 # if build bsp fails, there will be a b.log that needs to be mailed
 parser = OptionParser(
   usage='usage: %prog [OPTIONS]',
-  description=description
+  description=description,
+  add_help_option=False
 )
 parser.add_option(
   '-v',
@@ -66,14 +65,12 @@ parser.add_option(
 )
 parser.add_option(
   '-D',
-  '--top-directory',
   dest='top',
   default=os.environ['HOME']+'/rtems-cron',
   help='Top directory (default=${HOME}/rtems-cron'
 )
 parser.add_option(
   '-V',
-  '--version',
   dest='version',
   default='6',
   help='RTEMS Version (default=6)'
@@ -96,23 +93,34 @@ parser.add_option(
 )
 parser.add_option(
   '-F',
-  '--from-address',
   dest='from_addr',
   default='joel@rtems.org',
   help='From address (default=joel@rtems.org)'
 )
 parser.add_option(
   '-T',
-  '--to-address',
   dest='to_addr',
   default='build@rtems.org',
   help='To address (default=build@rtems.org)'
 )
 parser.add_option(
+  '-S',
+  dest='build_in_steps',
+  default=False,
+  action='store_true',
+  help='Build in steps (default=no)'
+)
+parser.add_option(
   '-s',
-  dest='step',
+  dest='start_step',
   default=1,
-  help='Execute a certain step (default=1)'
+  help='Step to start executing at (default=1)'
+)
+parser.add_option(
+  '-e',
+  dest='end_step',
+  default=1,
+  help='Step to stop executing at (default=1)'
 )
 parser.add_option(
   '-l',
@@ -120,21 +128,97 @@ parser.add_option(
   default=os.environ['HOME'] + '/rtems-cron',
   help='Path to log file (default=$HOME/rtems-cron)'
 )
+parser.add_option(
+  '-h',
+  '--help',
+  dest='help',
+  default=False,
+  action='store_true'
+)
+parser.add_option(
+  '-z',
+  dest='testing',
+  default=False,
+  action='store_true',
+)
 
 (options, args) = parser.parse_args(sys.argv)
 
+# if the user wants to see the help menu
+if options.help:
+  print('Usage: rtems-cron-runner [OPTIONS]\n')
+  print('Options:')
+  print('  -h, --help         Show this help message and exit')
+  print('  -v, --verbose      Verbose (default=no)')
+  print('  -f, --force-build  Force build (default=no)')
+  print('  -g, --git-update   Do git update (default=no)')
+  print('  -D TOP             Top directory (default=${HOME}/rtems-cron)')
+  print('  -V VERSION         RTEMS Version (default=6)')
+  print('  -w, --waf-build    Build using the WAF build system (default=no)')
+  print('  -m, --send-email   Send email (default=no)')
+  print('  -T TO_ADDR         To address (default=build@rtems.org)')
+  print('  -F FROM_ADDR       From address (default=joel@rtems.org)')
+  print('  -l LOG_PATH        Path to log file (default-${HOME}/rtems-cron)')
+  print('  -S BUILD_IN_STEPS  Build in steps (default=no)')
+  print('  -s START_STEP      Step to start executing at (default=1)')
+  print('  -e END_STEP        Step to stop executing at (default=1)\n\n')
+  print('Steps:')
+  print('  1. Build basic cross compilation tools')
+  print('  2. Build device tree compiler')
+  print('  3. Build Spike RISC-V simulator')
+  print('  4. Build Qemu4 Simulator')
+  print('  5. Bootstrap')
+  print('  6. Test the BSPs')
+  print('  7. Build the bsets')
+  print('  8. Build the BSPs')
+  print('\nNOTE: Some steps may be skipped if the \'-f\' option is not used.')
+  sys.exit(0)
+  
+testing = options.testing # don't run the code, just print out what would run
+
+# Helps us do the build process in steps
+step = int(options.start_step)
+
+steps = {
+  'build_tools' : [1, 'building tools'],
+  'build_dtc' : [2, 'building device tree compiler'],
+  'build_spike' : [3, 'building RISC-V Simulator'],
+  'build_qemu' : [4, 'building Qemu4 Simulator'],
+  'bootstrap' : [5, 'bootstrapping'],
+  'test_bsps' : [6, 'testing the BSPs'],
+  'build_bsets' : [7, 'buildings the bsets'],
+  'build_bsps' : [8, 'building the BSPs']
+}
+  
 # create log file
 logging.basicConfig(
   filename=options.log_path,
   level=logging.DEBUG,
   format='%(levelname)s:%(asctime)s:%(message)s'
-  )
+)
+  
+def info(string):
+  logging.info(string)
+  
+def log(status, msg):
+  if status == 0:
+    logging.info('PASSED ' + msg)
+  else:
+    logging.error('FAILED(' + str(status) + ') ' + msg)
 
 def vprint(string):
   if options.verbose:
     print(string)
   else:
     return
+    
+def step_done(key):
+  try:
+    vprint('Done with step {} ({})'.format(steps[key][0], steps[key][1]))
+  except KeyError:
+    output = '{} is not a key in the steps dictionary'.format(key)
+    print(output, file=sys.stderr)
+    info(output)
 
 def cmd_exists(cmd):
     return any(
@@ -151,15 +235,6 @@ def yes_or_no(val):
     return 'yes'
   else:
     return 'no'
-    
-def info(string):
-  logging.info(string)
-  
-def log(status, msg):
-  if status == 0:
-    logging.info('PASSED ' + msg)
-  else:
-    logging.error('FAILED(' + str(status) + ') ' + msg)
 
 master_version = '6'
 
@@ -174,7 +249,17 @@ if not os.path.isdir(options.top):
 os.chdir(options.top)
 
 # verify that arguments make sense
+# check that end step is not less than start step
 
+# make sure that end step is not less than start steps
+if options.build_in_steps and options.start_step >= options.end_step:
+  print(
+    'When building in steps, ensure that start step is less than end step!',
+    file=sys.stderr
+  )
+  sys.exit(1)
+
+# RTEMS5 did not have the WAF build system
 if options.version == '5' and options.waf_build:
   print('WAF was not the build system used with RTEMS 5.', file=sys.stderr)
   sys.exit(1)
@@ -290,8 +375,6 @@ if not options.force_build and \
 
 # build the tools 
 def do_rsb_build_tools(version):
-  # Helps us do the build process in steps
-  step = int(options.step)
 
   # Basic Cross-compilation Tools
   os.chdir(options.top + '/rtems-source-builder/rtems')
@@ -332,12 +415,13 @@ def do_rsb_build_tools(version):
       r + ' >o-' + rcpu + '-' + version + '.txt 2>&1\n' \
       )
     else:
-      if step == 1:
+      # if step is in range, or the build isn't being ran in steps
+      if step <= steps['build_tools'] or not options.build_in_steps:
         vprint('Building the tools for ' + rcpu + '...')
         file_name = 'o-' + rcpu + '-' + str(version) + '.txt'
         outfile = open(file_name, 'w')
         if options.send_email:
-          result = subprocess.call([
+          ARGS = [
             '../source-builder/sb-set-builder',
             '--mail',
             '--mail-to=' + options.to_addr,
@@ -345,20 +429,18 @@ def do_rsb_build_tools(version):
             '--keep-going',
             '--log=l-' + rcpu + '-' + version,
             '--prefix=' + options.top + '/tools/' + version,
-            r],
-            stdout=outfile,
-            stderr=outfile
-          )
+            r
+          ]
         else:
-          result = subprocess.call([
+          ARGS = [
             '../source-builder/sb-set-builder',
             '--keep-going',
             '--log=l-' + rcpu + '-' + version,
             '--prefix=' + options.top + '/tools/' + version,
-            r],
-            stdout=outfile,
-            stderr=outfile
-          )
+            r
+          ]
+          
+        result = subprocess.call(ARGS,stdout=outfile, stderr=outfile)
         outfile.close()
         log(result, 'RSB build of ' + r)
 
@@ -378,11 +460,14 @@ def do_rsb_build_tools(version):
   if result != 0:
     print('RSB build of RTEMS ' + version + ' Tools failed. ', file=sys.stderr)
     sys.exit(1)
-    
-  # comment out if not building in steps
-  if step == 1:
-    print('Done with step 1 (building tools)')
-    sys.exit(0)
+  
+  # if we are at the end step, end it, if not increase step
+  if options.build_in_steps:
+    step_done('build_tools')
+    if step == options.end_step:
+      sys.exit(0)
+    else:
+      step += 1
 
   # Device Tree Compiler
   start_time = time.time()
@@ -400,46 +485,52 @@ def do_rsb_build_tools(version):
     )
 
   else:
-    if step == 2:
+    if step <= steps['build_dtc'] or not options.build_in_steps:
       vprint('Running the device tree compiler...')
       file_name = 'l-dtc' + version + '.txt'
       outfile = open(file_name, 'w')
+      # if the user wants an email to be sent
       if options.send_email:
-        result = subprocess.call([
+        ARGS = [
             '../source-builder/sb-set-builder',
             '--mail',
             '--mail-to=' + options.to_addr,
             '--mail-from=' + options.from_addr,
             '--log=l-dtc-' + version + '.txt',
             '--prefix=' + options.top + '/tools/' + version,
-            'devel/dtc'],
-            stdout=outfile,
-            stderr=outfile
-          )
+            'devel/dtc'
+        ]
       else:
-        result = subprocess.call([
+        ARGS = [
             '../source-builder/sb-set-builder',
             '--log=l-dtc-' + version + '.txt',
             '--prefix=' + options.top + '/tools/' + version,
-            'devel/dtc'],
-            stdout=outfile,
-            stderr=outfile
-          )
+            'devel/dtc'
+        ]
+
+      result = subprocess.call(ARGS ,stdout=outfile, stderr=outfile)
       outfile.close()
       log(result, 'RSB build of devel/dtc')
 
-  # put that call in a subprocess call
   end_time = time.time()
-  vprint('Running the device tree compiler took ' + str(end_time - start_time) + ' seconds.')
+  vprint(
+    'Running the device tree compiler took ' + \
+    str(end_time - start_time) + ' seconds.'
+  )
 
   # if building the device tree compiler failed
   if result != 0:
     print('Running the device tree compiler failed. ', file=sys.stderr)
     sys.exit(1)
-    
-  if step == 2:
-    print('Done with step 2 (building device tree compiler)')
-    sys.exit(0)
+  
+  # if building in steps, check if the script needs to end or if step needs
+  # incrementing
+  if options.build_in_steps:
+    step_done('build_dtc')
+    if step == options.end_step:
+      sys.exit(0)
+    else:
+      step += 1
 
   # Spike RISC-V Simulator
   start_time = time.time()
@@ -456,45 +547,49 @@ def do_rsb_build_tools(version):
     )
 
   else:
-    if step == 3:
+    if step <= steps['build_spike'] or not options.build_in_steps:
       vprint('Running the Spike RISC-V Simulator...')
       file_name = 'l-spike' + version + '.txt'
       outfile = open(file_name, 'w')
       if options.send_email:
-        result = subprocess.call([
+        ARGS = [
             '../source-builder/sb-set-builder',
             '--mail',
             '--mail-to=' + options.to_addr,
             '--mail-from=' + options.from_addr,
-            '--log=l-spike-' + version + '.txt',
+            '--log=l-dtc-' + version + '.txt',
             '--prefix=' + options.top + '/tools/' + version,
-            'devel/spike'],
-            stdout=outfile,
-            stderr=outfile
-          )
+            'devel/dtc'
+        ]
       else:
-        result = subprocess.call([
+        ARGS = [
           '../source-builder/sb-set-builder',
           '--log=l-spike-' + version + '.txt',
           '--prefix=' + options.top + '/tools/' + version,
-          'devel/spike'],
-          stdout=outfile,
-          stderr=outfile
-        )
+          'devel/spike'
+        ]
+        
+      result = subprocess.call(ARGS, stdout=outfile, stderr=outfile)
       outfile.close()
       log(result, 'RSB build of devel/spike')
 
   end_time = time.time()
-  vprint('Running the Spike RISC-V Simulator took ' + str(end_time - start_time) + ' seconds.')
+  vprint(
+    'Running the Spike RISC-V Simulator took ' + \
+    str(end_time - start_time) + ' seconds.'
+  )
 
-  # if running the Spike RISC-V Simulator failed
+  # if building the Spike RISC-V Simulator failed
   if result != 0:
     print('Running the Spike RISC-V Simulator failed. ', file=sys.stderr)
     sys.exit(1)
     
-  if step == 3:
-    print('Done with step 3 (building RISC-V Simulator)')
-    sys.exit(0)
+  if options.build_in_steps:
+    step_done('build_spike')
+    if step == options.end_step:
+      sys.exit(0)
+    else:
+      step += 1
 
   # Qemu Simulator
   start_time = time.time()
@@ -512,45 +607,49 @@ def do_rsb_build_tools(version):
     )
   
   else:
-    if step == 4:
+    if step <= steps['build_qemu'] or not options.build_in_steps:
       vprint('Running the Qemu Simulator...')
       file_name = 'l-qemu4-' + version + '.txt'
       outfile = open(file_name, 'w')
       if options.send_email:
-        result = subprocess.call([
+        ARGS = [
             '../source-builder/sb-set-builder',
             '--mail',
             '--mail-to=' + options.to_addr,
             '--mail-from=' + options.from_addr,
             '--log=l-qemu-' + version + '.txt',
             '--prefix=' + options.top + '/tools/' + version,
-            'devel/qemu4'],
-            stdout=outfile,
-            stderr=outfile
-          )
+            'devel/qemu4'
+        ]
       else:
-        result = subprocess.call([
+        ARGS = [
             '../source-builder/sb-set-builder',
             '--log=l-qemu-' + version + '.txt',
             '--prefix=' + options.top + '/tools/' + version,
-            'devel/qemu4'],
-            stdout=outfile,
-            stderr=outfile
-          )
+            'devel/qemu4'
+        ]
+
+      result = subprocess.call(ARGS, stdout=outfile, stderr=outfile)
       outfile.close()
       log(result, 'RSB build of devel/qemu4')
 
   end_time = time.time()
-  vprint('Running Qemu Simulator took ' + str(end_time - start_time) + ' seconds.')
+  vprint(
+    'Running Qemu Simulator took ' + \
+    str(end_time - start_time) + ' seconds.'
+  )
 
-  # if running the Qemu 4 simulator failed
+  # if building the Qemu 4 simulator failed
   if result != 0:
     print('Running the Qemu 4 simulator failed. ', file=sys.stderr)
     sys.exit(1)
     
-  if step == 4:
-    print('Done with step 4 (building Qemu4 Simulator)')
-    sys.exit(0)
+  if options.build_in_steps:
+    step_done('build_qemu')
+    if step == options.end_step:
+      sys.exit(0)
+    else:
+      step += 1
 
 def do_bsp_builder():
   start_time = time.time()
@@ -592,11 +691,12 @@ def do_bsp_builder():
     sys.exit(1)
 
 # double check this
-os.environ['PATH'] = options.top + '/tools/' + str(options.version) + '/bin:' + os.environ['PATH']
+addition = options.top + '/tools/' + str(options.version) + '/bin:'
+os.environ['PATH'] = addition + os.environ['PATH']
 
 # Build RTEMS ${version}.x tools if needed
 if rsb_updated:
-  do_rsb_build_tools(str(options.version))
+  do_rsb_build_tools(str(options.version)) # I don't think I need this, double-check
 
 if rtems_updated:
   os.chdir(options.top + '/rtems')
@@ -604,7 +704,13 @@ if rtems_updated:
   if testing:
     print('./bootstrap -c')
   else:
-    subprocess.call(['./bootstrap', '-c'])
+    if step <= steps['bootstrap'] or not options.build_in_steps:
+      result = subprocess.call(['./bootstrap', '-c'])
+    
+      if result != 0:
+        print('The bootstrapping of RTEMS failed.')
+        log(result, 'The bootstrapping of RTEMS failed')
+        sys.exit(1)
 
 # Ensure this is after the RSB has built tools and PATH is updated
 # Check that rtems-bootstrap exists, is readable, and executable
@@ -614,19 +720,25 @@ if  not os.path.isfile('./rtems-bootstrap') or \
   print('This is not an RTEMS version this script supports.')
   sys.exit(0)
 else:
-  result = 0
   
   if testing:
     print('./rtems-bootstrap')
   
   else:
     result = subprocess.call(['./rtems-bootstrap'])
+    
+    log(result, 'rtems-bootstrap')
   
-  if result != 0:
-    print('rtems-bootstrap failed. ', file=sys.stderr)
-    sys.exit(1)
-
-BB_ARGS = '-T ' + options.top + '-v -r ' + MAIL_ARG + ' -t'
+    if result != 0:
+      print('rtems-bootstrap failed. ', file=sys.stderr)
+      sys.exit(1)
+      
+    if options.build_in_steps:
+      step_done('bootstrap')
+      if step == options.end_step:
+        sys.exit(0)
+      else:
+        step += 1
 
 def generate_arguments(build_system, cpu_and_bsp):
   BB_ARGS = [build_system, '-T', options.top, '-v', '-r']
@@ -638,6 +750,7 @@ def generate_arguments(build_system, cpu_and_bsp):
   BB_ARGS.append('-t')
   ARGS1 = [exedir() + '/build_bsp', '-V', options.version] + BB_ARGS
   
+  # if SMP arg is given, add it
   if SMP_ARG != '':
     ARGS1 += SMP_ARG
 
@@ -656,37 +769,60 @@ def test_single_bsp(cpu, bsp, SMP_ARG=''):
         str(cmd_exists(cpu + '-rtems' + options.version + '-gcc'))
   )
 
-  if cmd_exists(cpu + '-rtems' + options.version + '-gcc'):
+  if cmd_exists(cpu + '-rtems' + options.version + '-gcc') or testing:
   
     arch_and_bsp = [cpu, bsp]
       
     # (NO DEBUG) if this RTEMS version has a autoconf build, then build it that way
     if 'configure.ac' in os.listdir(options.top + '/rtems'):
       AC_ARGS = generate_arguments('-a', arch_and_bsp)
-      result = subprocess.call(AC_ARGS[0])
-      log(result, 'autoconf build of {} {}'.format(cpu, bsp))
+      if testing:
+        for arg in AC_ARGS[0]:
+          print(arg, end=' ')
+        print()
+          
+      else:
+        result = subprocess.call(AC_ARGS[0])
+        log(result, 'autoconf build of {} {}'.format(cpu, bsp))
 
     # (NO DEBUG) if this RTEMS version has a waf build, then build it that way
     if 'waf' in os.listdir(options.top + '/rtems'):
       WAF_ARGS = generate_arguments('-w', arch_and_bsp)
-      result = subprocess.call(WAF_ARGS[0])
-      log(result, 'waf build of {} {}'.format(cpu, bsp))
+      if testing:
+        for arg in WAF_ARGS[0]:
+          print(arg, end=' ')
+        print()
+          
+      else:
+        result = subprocess.call(WAF_ARGS[0])
+        log(result, 'waf build of {} {}'.format(cpu, bsp))
       
     # (DEBUG) if this RTEMS version has a autoconf build, then build it that way
     if 'configure.ac' in os.listdir(options.top + '/rtems'):
-      result = subprocess.call(AC_ARGS[1])
-      log(result, 'autoconf build of {} {} (DEBUG)'.format(cpu, bsp))
+      if testing:
+        for arg in AC_ARGS[1]:
+          print(arg, end=' ')
+        print()
+          
+      else:
+        result = subprocess.call(AC_ARGS[1])
+        log(result, 'autoconf build of {} {} (DEBUG)'.format(cpu, bsp))
       
     # (DEBUG) if this RTEMS version has a waf build, then build it that way
     if 'waf' in os.listdir(options.top + '/rtems'):
-      result = subprocess.call(WAF_ARGS[1])
-      log(result, 'waf build of {} {} (DEBUG)'.format(cpu, bsp))
+      if testing:
+        for arg in WAF_ARGS[1]:
+          print(arg, end=' ')
+        print()
+      else:
+        result = subprocess.call(WAF_ARGS[1])
+        log(result, 'waf build of {} {} (DEBUG)'.format(cpu, bsp))
       
-      if result == 0:
-        prev_dir = os.getcwd()
-        os.chdir(options.top + '/rtems')
-        subprocess.call(['./waf', 'distclean'])
-        os.chdir(prev_dir)
+        if result == 0:
+          prev_dir = os.getcwd()
+          os.chdir(options.top + '/rtems')
+          subprocess.call(['./waf', 'distclean'])
+          os.chdir(prev_dir)
 
   else:
     print('WARNING - no gcc for ' + cpu + ' ' + bsp)
@@ -695,71 +831,93 @@ if rsb_updated or rtems_updated:
   start_time = time.time()
 
   os.chdir(options.top)
+  
+  if step <= steps['test_bsps'] or not options.build_in_steps:
+    test_single_bsp('sparc', 'erc32-sis')
+    test_single_bsp('sparc', 'leon2-sis')
+    test_single_bsp('sparc', 'leon3-sis')
+    test_single_bsp('powerpc', 'psim')
+    test_single_bsp('mips', 'jmr3904')
+    test_single_bsp('riscv', 'griscv-sis')
+    test_single_bsp('sparc', 'leon3-sis', '-S')
 
-  test_single_bsp('sparc', 'erc32-sis')
-  test_single_bsp('sparc', 'leon2-sis')
-  test_single_bsp('sparc', 'leon3-sis')
-  test_single_bsp('powerpc', 'psim')
-  test_single_bsp('mips', 'jmr3904')
-  test_single_bsp('riscv', 'griscv-sis')
-  test_single_bsp('sparc', 'leon3-sis', '-S')
+    # Make sure Spike is available for these BSPs
+    if cmd_exists('spike'):
+    
+      bsps = ['rv32iac_spike', 'rv32imac_spike', 'rv32imafc_spike',
+      'rv32imafdc_spike', 'rv32imafd_spike', 'rv32im_spike', 'rv32i_spike',
+      'rv64imac_medany_spike', 'rv64imac_spike', 'rv64imafdc_medany_spike',
+      'rv64imafdc_spike', 'rv64imafd_medany', 'rv64imafd_medany_spike',
+      'rv64imafd_spike'
+      ]
 
-  # Make sure Spike is available for these BSPs
-  if cmd_exists('spike'):
-    bsps = ['rv32iac_spike', 'rv32imac_spike', 'rv32imafc_spike',
-    'rv32imafdc_spike', 'rv32imafd_spike', 'rv32im_spike', 'rv32i_spike',
-    'rv64imac_medany_spike', 'rv64imac_spike', 'rv64imafdc_medany_spike',
-    'rv64imafdc_spike', 'rv64imafd_medany', 'rv64imafd_medany_spike',
-    'rv64imafd_spike'
-    ]
-
-    for bsp in bsps:
-      test_single_bsp('riscv', bsp)
-
-    # Now build all supported BSP bset stacks
-    os.chdir(options.top + '/rtems-source-builder/rtems')
-
-    bsets = ['atsamv', 'beagleboneblack', 'erc32', 'gr712rc', 'gr740', 'imx7',
-     'pc', 'qoriq_e500', 'qoriq_e6500_32', 'qoriq_e6500_64', 'raspberrypi2',
-      'xilinx_zynq_zc702', 'xilinx_zynq_zc706', 'xilinx_zynq_zedboard'
-    ]
-
-    for bset in bsets:
-      bset_start_time = time.time()
-      
-      if testing:
-        print( \
-          '../source-builder/sb-set-builder ' + \
-          '--mail --mail-to=' + options.to_addr + \
-          '--mail-from=' + options.from_addr + \
-          ' --log=l-' + bset + '-' + options.version + '.txt ' + \
-          '--prefix=' + options.top + '/tools/' + options.version + ' ' + \
-          options.version + '/bsps/' + bset + ' ' + \
-          '>o-' + bset + '-' + options.version + '.txt' + ' 2>&1'
-        )
+      for bsp in bsps:
+        test_single_bsp('riscv', bsp)
         
-      else:
-        file_name = 'o-' + bset + '-' + options.version + '.txt'
-        outfile = open(file_name, 'w')
-        result = subprocess.call([
-          '../source-builder/sb-set-builder',
-          '--mail',
-          '--mail-to=' + options.to_addr,
-          '--mail-from=' + options.from_addr,
-          '--log=l-' + bset + '-' + options.version + '.txt',
-          '--prefix=' + options.top + '/tools/' + options.version,
-          options.version + '/bsps/' + bset],
-          stdout=outfile,
-          stderr=outfile
+      if options.build_in_steps:
+        step_done('test_bsps')
+        if step == options.end_step:
+          sys.exit(0)
+        else:
+          step += 1
+
+      # Now build all supported BSP bset stacks
+      os.chdir(options.top + '/rtems-source-builder/rtems')
+
+      bsets = ['atsamv', 'beagleboneblack', 'erc32', 'gr712rc', 'gr740', 'imx7',
+       'pc', 'qoriq_e500', 'qoriq_e6500_32', 'qoriq_e6500_64', 'raspberrypi2',
+        'xilinx_zynq_zc702', 'xilinx_zynq_zc706', 'xilinx_zynq_zedboard'
+      ]
+
+      for bset in bsets:
+        bset_start_time = time.time()
+        
+        if testing:
+          print( \
+            '../source-builder/sb-set-builder ' + \
+            '--mail --mail-to=' + options.to_addr + \
+            '--mail-from=' + options.from_addr + \
+            ' --log=l-' + bset + '-' + options.version + '.txt ' + \
+            '--prefix=' + options.top + '/tools/' + options.version + ' ' + \
+            options.version + '/bsps/' + bset + ' ' + \
+            '>o-' + bset + '-' + options.version + '.txt' + ' 2>&1'
           )
-        log(result, 'RSB build of bsps/' + bset)
+          
+        else:
+          if step <= steps['build_bsets'] or not options.build_in_steps:
+            file_name = 'o-' + bset + '-' + options.version + '.txt'
+            outfile = open(file_name, 'w')
+            result = subprocess.call([
+              '../source-builder/sb-set-builder',
+              '--mail',
+              '--mail-to=' + options.to_addr,
+              '--mail-from=' + options.from_addr,
+              '--log=l-' + bset + '-' + options.version + '.txt',
+              '--prefix=' + options.top + '/tools/' + options.version,
+              options.version + '/bsps/' + bset],
+              stdout=outfile,
+              stderr=outfile
+              )
+              
+            log(result, 'RSB build of bsps/' + bset)
+            
+            if options.build_in_steps:
+              step_done('build_bsets')
+              if step == options.end_step:
+                sys.exit(0)
+              else:
+                step += 1
 
-      bset_end_time = time.time()
-      print('Building all supported BSP bset stacks took' + \
-            str(bset_end_time - bset_start_time) + ' seconds.'
-      )
+        bset_end_time = time.time()
+        print(
+          'Building all supported BSP bset stacks took' + \
+          str(bset_end_time - bset_start_time) + ' seconds.'
+        )
 
-      do_bsp_builder()
+        if step <= steps['build_bsps'] or not options.build_in_steps:
+          do_bsp_builder()
+          if options.build_in_steps:
+            step_done('build_bsps')
 
 script_end = datetime.datetime.now()
 
